@@ -1,0 +1,51 @@
+# ============================================================
+# vision-ui-autotest —— 配置模板
+# 使用方法：复制为 config.yaml 后按实际环境填写（config.yaml 已 gitignore，
+# 不会进入仓库）；敏感值一律支持 ${ENV_VAR} 环境变量注入，不要写明文。
+# ============================================================
+
+# 浏览器配置
+browser:
+  headless: true          # 全局无头；环境变量 PW_HEADLESS（1/0）可覆盖
+  viewport:
+    width: 1440
+    height: 900
+  default_timeout_ms: 15000
+  nav_timeout_ms: 30000
+
+# 截图 / 报告目录
+screenshot_dir: "screenshots"
+report_dir: "reports"
+
+# 登录成功判据：顶部导航出现任一菜单文字即视为登录成功（按被测站点实际菜单填写）
+login_ready_menus:
+  - "首页"
+  - "系统设置"
+
+# 接口请求配置（token 键名由被测站点决定）
+api:
+  token_storage_key: "token"
+  auth_header: "Authorization"
+  auth_prefix: "Bearer "
+
+# ---- 以下两段供「无平台单机模式」使用：平台 DB 不可用时回退读取 ----
+# 站点信息（优先由平台「测试数据管理」页面维护，落 DB）
+site:
+  base_url: "https://your-site.example.com"
+  login_path: "/login"
+
+# 站点账号（建议 ${ENV_VAR} 注入，不要提交明文）
+account:
+  username: "${SITE_USERNAME}"
+  password: "${SITE_PASSWORD}"
+
+# 数据库配置（站点/账号/大模型配置均落库，由平台页面维护）
+# 不需要 MySQL 时保持 enabled: false，自动使用本地 SQLite
+database:
+  enabled: false
+  host: "${DB_HOST}"
+  port: 3306
+  user: "${DB_USER}"
+  password: "${DB_PASSWORD}"
+  name: "vision_ui_autotest"
+  charset: "utf8mb4"

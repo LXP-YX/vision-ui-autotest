@@ -1,0 +1,14 @@
+# 构建镜像时排除的内容（缩小上下文、避免带入本地状态）
+.venv/
+.git/
+**/__pycache__/
+**/*.pyc
+.pytest_cache/
+.idea/
+.DS_Store
+screenshots/
+reports/
+platform/platform.db
+platform/frontend/node_modules/
+platform/frontend/dist/
+docs/

@@ -1,0 +1,55 @@
+# Screenshots
+screenshots/
+
+# 报告产物
+reports/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+
+# OS
+.DS_Store
+
+# Playwright 录制产物（仅本地参考，不提交）
+recorded/
+
+# 登录态缓存
+.auth/
+
+# Trace / 测试结果
+test-results/
+
+# 平台本地数据库
+platform/*.db
+*.db
+
+# 前端构建产物
+platform/frontend/dist/
+
+# node_modules
+node_modules/
+
+# 本地配置（含账号/内网地址等敏感信息，不入库；模板见 config.example.yaml）
+config.yaml
+
+# 环境变量文件
+.env
+
+# IDE / 编辑器
+.idea/
+.vscode/
+
+# AI 工具本地配置
+.claude/
+.claude-*
+.joycode/
+
+# 运行时产物
+app.pid
+*.pid
+
+# 迁移脚本的本地数据备份（含业务用例数据，不入库）
+platform/backend/migrations/_backup_*/
