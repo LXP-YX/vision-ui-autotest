@@ -10,6 +10,7 @@ SQLAlchemy>=2.0
 PyMySQL>=1.1
 cryptography>=41.0
 
-# APP 自动化（纯 ADB 路线，不引入 Appium/Node）
+# APP 自动化（Android=纯 ADB；iOS=Appium/XCUITest，需另装 Node 侧 Appium Server）
 python-multipart>=0.0.6   # FastAPI UploadFile（APK 上传）
 aiofiles>=23.0            # APK 异步落盘
+Appium-Python-Client>=4.0 # iOS 驱动（XCUITest）；Android 不依赖本包

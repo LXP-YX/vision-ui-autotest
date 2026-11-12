@@ -31,7 +31,7 @@ This file provides guidance to AI coding agents (Claude Code / others) when work
 | 目录 | 角色 |
 |------|------|
 | `core/` | **Web 执行内核**（Playwright 封装）：浏览器生命周期、页面对象、状态等待、UI 健康检查、大模型客户端、VLM 视觉能力、脚本自愈。被 pytest 与平台 Worker 共同复用。 |
-| `core_app/` | **App 执行内核**（可选，纯 ADB 路线）：`adb_bridge.py`、`driver.py`、`vision.py`、`self_healing.py`、`planner.py`、`app_runner.py`。不引入 Appium/Node；大模型复用 `core/llm_client.get_client()`。 |
+| `core_app/` | **App 执行内核**（独立，双平台）：`drivers/`（`base.py` 驱动抽象 + `android/` 纯 ADB + `ios/` Appium XCUITest）、`vision.py`、`self_healing.py`、`planner.py`、`app_runner.py`。Android 不引入 Appium/Node；iOS 需 Appium Server + WDA；大模型复用 `core/llm_client.get_client()`。 |
 | `conftest.py` / `pytest.ini` | pytest 基础设施：会话级登录复用（context 预登录、cookies 跨用例共享）+ 失败自动截图。`tests/` 用例目录已移除，用例主要在平台维护。 |
 | `platform/` | **可视化测试平台**：`backend/`（FastAPI + DB）、`backend/app/`（App REST 路由 + 投屏 WS）、`frontend/`（Vue3 + Vite4 + Element Plus + vue-router）、`worker/`（执行 + CDP 投屏 + AI Planner + 页面探索/录制/脚本编译）。 |
 | `start.py` | 一键启动器（开发/生产模式）。 |
@@ -50,7 +50,7 @@ This file provides guidance to AI coding agents (Claude Code / others) when work
 ## 数据库
 
 - 连接读自 `config.yaml` 的 `database` 段：`enabled: true` 用 **MySQL**（默认库名 `vision_ui_autotest`），否则/连接失败**回退本地 SQLite**（`platform/platform.db`）。
-- 核心表：`test_case` / `test_run` / `llm_config` / `locator` / `test_env` 等（见 `platform/backend/schema.sql`；应用启动时 `create_all` 自动建）。
+- 核心表：`test_case` / `test_run` / `llm_config` / `locator`（WEB 自愈知识库，带 `env_id`）/ `test_env` / `app_env`（APP 测试环境）/ `app_locator`（APP 自愈知识库，与 locator 表级拆分）等（见 `platform/backend/schema.sql`；应用启动时 `create_all` 自动建）。
 - `test_env.login_path` 已废弃：列保留不用（旧库该列 NOT NULL，删映射会让新建环境写库失败），页面/接口/模型输出均不再暴露。
 - 约定：**现有字段只增不改**，不含账户敏感数据。DB 变更需人工执行 SQL 脚本（`platform/backend/migrations/`）。
 
@@ -60,19 +60,21 @@ This file provides guidance to AI coding agents (Claude Code / others) when work
 - **AI Planner**（`platform/worker/planner.py`）：function call 把中文步骤解析为 6 类动作（login / navigate / click_element / assert_visual / check_health / wait），另有 `api_scenario` 动作由规则式解析（`runner.py` 的 `_interpret_step`）产生，LLM 不可用时整体回退规则式。
 - **接口测试引擎**（`worker/api_runner.py`）：纯 HTTP（requests）不起浏览器；「场景」= 前置 + 主步骤，每步引用接口库的 `api_id`，变量上下文 ctx 跨步骤共享（`$.data.token` 式提取器 + `${var}` 替换；内置 `${TODAY}` / `${YESTERDAY}` 等日期变量）。UI 用例里以 `api_scenario` 动作嵌入场景，登录后的 token 存入 `ctx['token']` 可被场景引用。
 - **接口请求 + token 全局变量**：登录步骤后自动从 localStorage（键名 `config.yaml` 的 `api.token_storage_key`）提取 token 存入 `ctx['token']`，供接口场景 `${token}` 变量替换。
-- **AI 生成用例**（`platform/backend/generator.py`）：需求描述 → function call 生成结构化草稿（`status=draft`），人工审核后 `active`。
+- **AI 生成用例**（`platform/backend/generator.py`）：需求描述 → function call 生成结构化草稿（`status=draft`），人工审核后 `active`；`driver_type='app'` 走 APP 动作集提示词。WEB 用例可编译 Playwright 脚本（`/api/cases/{id}/compile`），**APP 用例不编译脚本**（编译接口已对 `driver_type=app` 拦截）。
 - **页面探索生成**（`worker/explorer.py`）与**录制生成**（`worker/recorder.py`）：真实打开页面/录制操作后由 AI 翻译成中文用例草稿。
 - **脚本编译**（`worker/script_compiler.py`）：把中文步骤编译为完整 Playwright Python 脚本；生成脚本中的登录判据选择器与 token 键名通过环境变量 `PW_LOGIN_READY_SEL` / `PW_TOKEN_KEY` 由 runner 注入（生成脚本内用 `LOGIN_READY_SEL` / `TOKEN_KEY` 变量，勿硬编码菜单文字）。
 - **VLM 视觉能力**（`core/vision.py`）：`locate()` 截图→坐标→`elementFromPoint` 反查→稳定选择器；`assert_visual()` 视觉断言。截图缩放 + JPEG 压缩降 token。
 - **脚本自愈**（`core/self_healing.py`）：`find_element()` 三级定位（Store 命中 → 语义 `:text-is(...):visible` → VLM），成功回写 `locator` 表；全失败返回 None——**自愈 ≠ 掩盖 Bug**。
 - **加密**（`core/crypto.py`）：API Key 经 Fernet 加密落库；**主密钥来自环境变量 `AUTOTEST_SECRET_KEY`**，代码内无固定密钥；密文带 `enc:v1:` 前缀；decrypt 不兼容无前缀明文。
 
-## APP 自动化（可选，纯 ADB 路线）
+## APP 自动化（独立引擎：Android=纯 ADB / iOS=Appium）
 
-与 Web 自动化架构对称，复用同一平台与大模型配置入口；差异仅在引擎层与投屏来源（`adb exec-out screencap` 采集，帧率受 adb 传输限制 ≈1 FPS）。
-- **三层定位自愈**：locator 表 → UI XML 语义匹配 → VLM 截图定位。
-- **运行要求**：需 `adb` 在 PATH 且已连接设备。
-- **适用场景**：Android 原生应用测试，无需 Appium/Node 环境依赖。
+与 WEB 自动化（`core/`）完全解耦：引擎层互不依赖，仅在平台层经 `platform/backend/runner_dispatch.py` 按 `driver_type` 分流（分叉点已上提到 manager 层，APP 链路不加载 Playwright）。核心思想一致：自然语言驱动、视觉理解、脚本自愈。
+- **驱动抽象**（`core_app/drivers/`）：`base.DeviceDriver` 统一契约 + `UiNode` 统一节点模型（text/desc/resource_id/bounds）；`android/`（纯 stdlib ADB）、`ios/`（Appium XCUITest，像素↔逻辑点换算、元素级 Unicode 输入）。`create_driver(platform, device_id, ...)` 工厂选择实现。
+- **APP 测试环境**（`app_env` 表，「APP 测试环境」页面维护）：platform(android|ios) + 设备 serial/udid + 被测 App package/bundle_id + 可选账号；用例绑 `test_case.app_env_id`，`device_serial` 保留为临时手动覆盖；未绑环境的存量用例按 Android 旧字段兼容执行。
+- **三层定位自愈**（`core_app/self_healing.py`）：`app_locator` 表（与 WEB 的 `locator` 表**表级拆分**，selector 存 `{"by","value"}` JSON）→ UiNode 语义匹配 → VLM 截图定位；知识库行带 `platform` + `env_id` 维度，同名锚点在 WEB/Android/iOS/不同环境间互不串扰。WEB 侧 `core/self_healing.py` 同样支持 `env_id`（`locator.env_id`，NULL=全局）。
+- **运行要求**：Android 需 `adb` 在 PATH 且已连接设备；iOS 需 mac + Xcode（WDA 部署）、`pip install Appium-Python-Client`、Node 侧 `appium` server 常驻（地址读 `config.yaml` 的 `appium.server_url`，默认 127.0.0.1:4723）。
+- **投屏**：`/ws/app/screen/{device_id}?platform=` 双平台采集（android=adb screencap，iOS=xcrun 截图预览；触控/输入仅 Android 工作台支持，iOS 交互经用例执行由 Appium 驱动）。
 
 ## 常用命令
 

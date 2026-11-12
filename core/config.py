@@ -79,7 +79,8 @@ def _default_env() -> dict:
             if not env:
                 env = s.query(TestEnv).order_by(TestEnv.id).first()
             if env:
-                return {"base_url": env.base_url,
+                return {"id": env.id,
+                        "base_url": env.base_url,
                         "username": env.username, "password": env.password}
     except Exception:
         pass  # DB 不可用：落到 config.yaml 回退
@@ -94,6 +95,17 @@ def _default_env() -> dict:
         "无测试环境配置：请在平台「测试环境管理」页面添加一条默认环境，"
         "或在 config.yaml 配置 site.base_url 与 account 段"
     )
+
+
+def default_env_id() -> int | None:
+    """默认 WEB 测试环境 id（自愈知识库按环境隔离用）。
+
+    DB 不可用或回退 config.yaml 单机模式时返回 None（知识库读写走全局行）。
+    """
+    try:
+        return _default_env().get("id")
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def get(*keys: str, default: Any = None) -> Any:

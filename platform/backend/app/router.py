@@ -1,6 +1,7 @@
-"""App REST 路由：设备/截图/触控/App 管理。
+"""App REST 路由：设备/截图/触控/App 管理 + APP 测试环境 + APP 自愈知识库。
 
-挂载在 /api/app 前缀下（main.py include_router）。底层用 core_app.adb_bridge。
+挂载在 /api/app 前缀下（main.py include_router）。底层用 core_app.drivers
+（android=ADB；iOS 设备枚举/截图走 xcrun CLI，交互控制与执行走 Appium）。
 """
 
 from __future__ import annotations
@@ -19,8 +20,22 @@ _ROOT = Path(__file__).resolve().parent.parent.parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from core_app import adb_bridge  # noqa: E402
+# ADB 命令封装（Android 设备管理）；别名保持 adb_bridge.* 调用点不变
+from core_app.drivers.android import adb as adb_bridge  # noqa: E402
 from core_app import apk_label  # noqa: E402
+from core_app.drivers.ios.driver import default_server_url  # noqa: E402
+from . import ios_tools  # noqa: E402
+
+# APP 测试环境 / 自愈知识库落库（DB 不可用时环境接口报清晰错误）
+_BACKEND = Path(__file__).resolve().parent.parent
+if str(_BACKEND) not in sys.path:
+    sys.path.insert(0, str(_BACKEND))
+
+try:
+    from db import AppEnv, AppLocator, SessionLocal  # type: ignore
+    _DB_OK = True
+except Exception:  # noqa: BLE001
+    _DB_OK = False
 
 router = APIRouter(prefix="/api/app", tags=["app"])
 
@@ -67,12 +82,32 @@ def _check_serial(serial: str) -> None:
 # ------------------------- Android 设备管理（ADB） -------------------------
 
 @router.get("/devices")
-def list_devices():
-    """列出所有已连接 ADB 设备。"""
+def list_devices(platform: str = "android"):
+    """列出设备。platform=android（默认，ADB）；platform=ios（xcrun 枚举模拟器+真机）。"""
+    if platform == "ios":
+        try:
+            return ios_tools.list_ios_devices()
+        except ios_tools.IosToolError as e:
+            raise HTTPException(503, str(e))
     try:
         return adb_bridge.list_devices()
     except adb_bridge.AdbError as e:
         raise HTTPException(503, str(e))
+
+
+@router.get("/appium-status")
+def appium_status():
+    """Appium Server 连通性（iOS 执行前置条件检查）。"""
+    import requests
+    url = default_server_url()
+    try:
+        r = requests.get(f"{url.rstrip('/')}/status", timeout=5)
+        ok = r.status_code == 200
+        return {"ok": ok, "server_url": url,
+                "error": None if ok else f"HTTP {r.status_code}"}
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "server_url": url,
+                "error": f"无法连接 Appium Server：{type(e).__name__}"}
 
 
 @router.get("/devices/{serial}/status")
@@ -84,27 +119,41 @@ def device_status(serial: str):
         raise HTTPException(503, str(e))
 
 
+def _png_to_jpeg_b64(png: bytes) -> tuple[str, int, int]:
+    """PNG bytes → 限宽 900 的 JPEG base64。返回 (b64, width, height)。"""
+    from PIL import Image
+    im = Image.open(BytesIO(png))
+    if im.mode != "RGB":
+        im = im.convert("RGB")  # PNG 常为 RGBA，JPEG 不支持 alpha
+    w, h = im.size
+    if w > 900:
+        im = im.resize((900, int(h * 900 / w)))
+    buf = BytesIO()
+    im.save(buf, "JPEG", quality=60)
+    return base64.b64encode(buf.getvalue()).decode(), im.size[0], im.size[1]
+
+
 @router.get("/devices/{serial}/screenshot")
-def device_screenshot(serial: str):
+def device_screenshot(serial: str, platform: str = "android"):
     """当前截图（JPEG Base64，供前端非投屏场景单帧拉取）。"""
+    if platform == "ios":
+        png = ios_tools.ios_screenshot(serial)
+        if not png:
+            raise HTTPException(503, "iOS 截图失败（需 mac + Xcode；模拟器需已启动）")
+        try:
+            data, w, h = _png_to_jpeg_b64(png)
+            return {"data": data, "width": w, "height": h}
+        except Exception as e:  # noqa: BLE001
+            raise HTTPException(503, f"截图处理失败：{e}")
     _check_serial(serial)
     try:
         png = adb_bridge.screenshot(serial)
-        from PIL import Image
-        im = Image.open(BytesIO(png))
-        if im.mode != "RGB":
-            im = im.convert("RGB")  # screencap PNG 常为 RGBA，JPEG 不支持 alpha
-        w, h = im.size
-        if w > 900:
-            im = im.resize((900, int(h * 900 / w)))
-        buf = BytesIO()
-        im.save(buf, "JPEG", quality=60)
-        return {"data": base64.b64encode(buf.getvalue()).decode(),
-                "width": im.size[0], "height": im.size[1]}
+        data, w, h = _png_to_jpeg_b64(png)
+        return {"data": data, "width": w, "height": h}
     except adb_bridge.AdbError as e:
         raise HTTPException(503, str(e))
     except Exception as e:  # noqa: BLE001
-        # PIL 不可用或截图失败，退回原始 PNG base64
+        # PIL 不可用或处理失败，退回原始 PNG base64
         try:
             png = adb_bridge.screenshot(serial)
             return {"data": base64.b64encode(png).decode()}
@@ -244,10 +293,131 @@ def uninstall_app(serial: str, package: str):
 
 @router.post("/devices/{serial}/launch")
 def launch_app(serial: str, body: LaunchIn):
-    """启动指定 App（对应工作台「启动 App」按钮）。"""
+    """启动指定 App（对应工作台「启动 App」按钮，仅 Android）。"""
     _check_serial(serial)
     try:
         adb_bridge.start_app(serial, body.package, body.activity)
         return {"ok": True}
     except adb_bridge.AdbError as e:
         raise HTTPException(503, str(e))
+
+
+# ------------------------- APP 测试环境 -------------------------
+
+class AppEnvIn(BaseModel):
+    name: str
+    platform: str = "android"   # android|ios
+    device_id: str = ""         # serial / udid
+    app_id: str = ""            # package / bundle_id
+    app_activity: str = ""      # Android 启动 Activity，iOS 留空
+    username: str = ""
+    password: str = ""
+    remark: str = ""
+    is_default: bool = False
+
+
+def _require_db():
+    if not _DB_OK:
+        raise HTTPException(500, "数据库不可用（app_env 需要平台 DB）")
+
+
+@router.get("/envs")
+def list_app_envs():
+    """APP 测试环境列表（密码掩码）。"""
+    _require_db()
+    with SessionLocal() as s:
+        return [e.to_dict(mask=True) for e in s.query(AppEnv).order_by(AppEnv.id).all()]
+
+
+@router.post("/envs")
+def create_app_env(body: AppEnvIn):
+    _require_db()
+    if body.platform not in ("android", "ios"):
+        raise HTTPException(400, "platform 仅支持 android / ios")
+    with SessionLocal() as s:
+        is_first = s.query(AppEnv).count() == 0
+        e = AppEnv(**body.model_dump(), is_default=is_first or body.is_default)
+        if body.is_default:
+            s.query(AppEnv).update({AppEnv.is_default: False})
+        s.add(e)
+        s.commit()
+        s.refresh(e)
+        return e.to_dict()
+
+
+@router.put("/envs/{env_id}")
+def update_app_env(env_id: int, body: AppEnvIn):
+    _require_db()
+    with SessionLocal() as s:
+        e = s.get(AppEnv, env_id)
+        if not e:
+            raise HTTPException(404, "APP 环境不存在")
+        data = body.model_dump()
+        if "****" in (data.get("password") or ""):  # 掩码：不改密码
+            data.pop("password")
+        for k, v in data.items():
+            setattr(e, k, v)
+        if body.is_default:
+            # 设为默认时清掉其他默认（排除自身）
+            s.query(AppEnv).filter(AppEnv.id != env_id).update({AppEnv.is_default: False})
+        s.commit()
+        s.refresh(e)
+        return e.to_dict()
+
+
+@router.delete("/envs/{env_id}")
+def delete_app_env(env_id: int):
+    _require_db()
+    with SessionLocal() as s:
+        e = s.get(AppEnv, env_id)
+        if e:
+            was_default = e.is_default
+            s.delete(e)
+            s.commit()
+            # 删的是默认环境时，自动把最早的一条设为默认（与 WEB 环境管理行为一致）
+            if was_default:
+                nxt = s.query(AppEnv).order_by(AppEnv.id).first()
+                if nxt:
+                    nxt.is_default = True
+                    s.commit()
+        return {"ok": True}
+
+
+@router.post("/envs/{env_id}/set-default")
+def set_default_app_env(env_id: int):
+    _require_db()
+    with SessionLocal() as s:
+        e = s.get(AppEnv, env_id)
+        if not e:
+            raise HTTPException(404, "APP 环境不存在")
+        s.query(AppEnv).update({AppEnv.is_default: False})
+        e.is_default = True
+        s.commit()
+        return {"ok": True}
+
+
+# ------------------------- APP 自愈知识库 -------------------------
+
+@router.get("/locators")
+def list_app_locators(platform: str | None = None, env_id: int | None = None):
+    """APP 自愈知识库列表（可按 platform / env_id 过滤）。"""
+    _require_db()
+    with SessionLocal() as s:
+        q = s.query(AppLocator)
+        if platform:
+            q = q.filter((AppLocator.platform == platform) | (AppLocator.platform.is_(None)))
+        if env_id:
+            q = q.filter((AppLocator.env_id == env_id) | (AppLocator.env_id.is_(None)))
+        return [x.to_dict() for x in q.order_by(AppLocator.id).all()]
+
+
+@router.delete("/locators/{loc_id}")
+def delete_app_locator(loc_id: int):
+    _require_db()
+    with SessionLocal() as s:
+        obj = s.get(AppLocator, loc_id)
+        if not obj:
+            raise HTTPException(404, "app locator not found")
+        s.delete(obj)
+        s.commit()
+        return {"ok": True}

@@ -1,20 +1,29 @@
 <template>
   <div class="wb">
-    <!-- 顶栏：设备选择 + 状态 + 刷新 + 启动 App -->
+    <!-- 顶栏：平台切换 + 设备选择 + 状态 + 刷新 + 启动 App -->
     <div class="bar">
+      <span class="sec-title">平台</span>
+      <el-radio-group v-model="platform" size="small" @change="onPlatformChange">
+        <el-radio-button value="android">Android</el-radio-button>
+        <el-radio-button value="ios">iOS</el-radio-button>
+      </el-radio-group>
       <span class="sec-title">设备</span>
-      <el-select v-model="serial" placeholder="选择设备" size="small" style="width: 220px"
+      <el-select v-model="serial" placeholder="选择设备" size="small" style="width: 240px"
                  @change="onDeviceChange">
-        <el-option v-for="d in devices" :key="d.serial" :label="`${d.serial}（${d.state}）`" :value="d.serial" />
+        <el-option v-for="d in devices" :key="deviceKey(d)" :label="`${deviceLabel(d)}`" :value="deviceKey(d)" />
       </el-select>
       <el-tag :type="online ? 'success' : 'danger'" size="small" effect="dark">
         {{ online ? '在线' : (serial ? '离线' : '未选设备') }}
       </el-tag>
       <span v-if="devSize" class="dim">{{ devSize.w }}×{{ devSize.h }}</span>
       <el-button size="small" plain :icon="Refresh" @click="loadDevices">刷新设备</el-button>
-      <el-button size="small" type="primary" plain :icon="VideoPlay" :disabled="!online" @click="launchDlg = true">
+      <el-button v-if="platform === 'android'" size="small" type="primary" plain :icon="VideoPlay"
+                 :disabled="!online" @click="launchDlg = true">
         启动 App
       </el-button>
+      <el-tag v-if="platform === 'ios' && appiumState && !appiumState.ok" type="danger" size="small">
+        Appium Server 未连接：{{ appiumState.error || '' }}
+      </el-tag>
     </div>
 
     <el-row :gutter="12" class="body">
@@ -26,8 +35,18 @@
             <el-button size="small" type="primary" plain style="float:right" :icon="Plus" @click="openEditor()">新建</el-button>
           </template>
           <el-table :data="appCases" size="small" max-height="560" empty-text="暂无 App 用例（driver_type=app）">
-            <el-table-column prop="name" label="名称" min-width="110" show-overflow-tooltip />
-            <el-table-column prop="app_package" label="包名" min-width="120" show-overflow-tooltip />
+            <el-table-column prop="name" label="名称" min-width="100" show-overflow-tooltip />
+            <el-table-column label="环境" min-width="110" show-overflow-tooltip>
+              <template #default="{ row }">{{ envName(row.app_env_id) || '未绑定（旧字段）' }}</template>
+            </el-table-column>
+            <el-table-column label="平台" width="70" align="center">
+              <template #default="{ row }">
+                <el-tag size="small" :type="(envPlatform(row.app_env_id) || 'android') === 'ios' ? 'warning' : 'success'">
+                  {{ (envPlatform(row.app_env_id) || 'android') === 'ios' ? 'iOS' : 'Android' }}
+                </el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column prop="device_serial" label="设备覆盖" width="100" show-overflow-tooltip />
             <el-table-column label="操作" width="140" align="center">
               <template #default="{ row }">
                 <el-button size="small" type="success" link :loading="running && runId && runCaseId === row.id"
@@ -42,8 +61,8 @@
 
       <!-- 右：App 管理 + 手机投屏 + 执行日志（上下排列） -->
       <el-col :span="9">
-        <!-- App 管理（宽度随右列收窄） -->
-        <el-card shadow="never" class="card">
+        <!-- App 管理（Android 专属：iOS 的安装/包管理不在工作台范围） -->
+        <el-card shadow="never" class="card" v-if="platform === 'android'">
           <template #header><span class="sec-title">App 管理</span></template>
           <div class="app-row">
             <el-upload :show-file-list="false" accept=".apk" :http-request="uploadApk" :disabled="!online">
@@ -72,22 +91,25 @@
             <span class="sec-title">手机投屏</span>
           </template>
           <div class="screen-wrap" :class="{ offline: !online }">
-            <canvas ref="canvas" class="screen"
+            <canvas ref="canvas" class="screen" :class="{ 'no-touch': !interactive }"
                     @mousedown="onMouseDown" @mouseup="onMouseUp" @click="focusKbd"
                     @mousemove="onMouseMove" @mouseleave="onMouseUp" />
-            <!-- 隐藏 input：捕获键盘输入（可打印字符走 adb input text，特殊键走 keyevent） -->
-            <input ref="kbd" class="kbd-capture" type="text" autocomplete="off"
+            <!-- 隐藏 input：捕获键盘输入（可打印字符走 input text，特殊键走 keyevent；仅 Android） -->
+            <input v-if="interactive" ref="kbd" class="kbd-capture" type="text" autocomplete="off"
                    @keydown="onKeydown" @input="onKbdInput"
                    @focus="kbdFocus = true" @blur="kbdFocus = false" />
             <div v-if="!online" class="screen-mask">设备不在线</div>
           </div>
-          <!-- 按键栏：BACK / HOME / 最近任务 / 回车 / 截图（图标库无三横线/回车符语义图标，这两键用文字字形） -->
+          <!-- 按键栏：BACK / HOME / 最近任务 / 回车 / 截图（iOS 仅 HOME；图标库无三横线/回车符语义图标，这两键用文字字形） -->
           <div class="keys">
-            <el-button size="small" :icon="Back" @click="key(4)" :disabled="!online" title="返回" />
-            <el-button size="small" :icon="HomeFilled" @click="key(3)" :disabled="!online" title="主屏" />
-            <el-button size="small" :disabled="!online" title="最近任务" @click="key(187)"><span class="key-glyph">≡</span></el-button>
-            <el-button size="small" :disabled="!online" title="回车" @click="key(66)"><span class="key-glyph">⏎</span></el-button>
+            <el-button v-if="interactive" size="small" :icon="Back" @click="key(4)" :disabled="!online" title="返回" />
+            <el-button size="small" :icon="HomeFilled" @click="key(3)" :disabled="!interactive || !online" title="主屏" />
+            <el-button v-if="interactive" size="small" :disabled="!online" title="最近任务" @click="key(187)"><span class="key-glyph">≡</span></el-button>
+            <el-button v-if="interactive" size="small" :disabled="!online" title="回车" @click="key(66)"><span class="key-glyph">⏎</span></el-button>
             <el-button size="small" :icon="Camera" @click="snapshot" :disabled="!online" title="截图" />
+          </div>
+          <div v-if="platform === 'ios'" class="dim ios-tip">
+            iOS 空闲预览仅支持查看画面与截图；触控/输入请通过用例执行（Appium 驱动）完成
           </div>
         </el-card>
 
@@ -126,15 +148,22 @@
 
     <!-- 用例编辑器 -->
     <el-dialog v-model="editorDlg" :title="editorForm.id ? '编辑 App 用例' : '新建 App 用例'" width="600px">
-      <el-form label-width="90px">
+      <el-form label-width="110px">
         <el-form-item label="用例名称"><el-input v-model="editorForm.name" /></el-form-item>
-        <el-form-item label="App 包名"><el-input v-model="editorForm.app_package" placeholder="com.example.myapp" /></el-form-item>
-        <el-form-item label="目标设备">
-          <el-input v-model="editorForm.device_serial" placeholder="emulator-5554（留空时取工作台当前设备）" />
+        <el-form-item label="APP 测试环境">
+          <el-select v-model="editorForm.app_env_id" placeholder="选择 APP 测试环境（决定平台/设备/被测 App）"
+                     style="width:100%" clearable>
+            <el-option v-for="e in appEnvs" :key="e.id"
+                       :label="`${e.name}（${e.platform === 'ios' ? 'iOS' : 'Android'} · ${e.device_id}）`" :value="e.id" />
+          </el-select>
+          <div class="dim">环境在「APP 测试环境」页面维护；旧用例未绑环境时按 Android 兼容执行</div>
+        </el-form-item>
+        <el-form-item label="设备覆盖（可选）">
+          <el-input v-model="editorForm.device_serial" placeholder="临时指定设备 serial/udid，留空则用环境设备" />
         </el-form-item>
         <el-form-item label="步骤（每行一步，自然语言）">
           <el-input v-model="stepText" type="textarea" :rows="8"
-            placeholder="1. 启动 App com.example.myapp/.ui.MainActivity&#10;2. 点击登录按钮&#10;3. 在用户名输入框输入 admin&#10;4. 断言页面显示欢迎语" />
+            placeholder="1. 启动被测 App&#10;2. 点击登录按钮&#10;3. 在用户名输入框输入 admin&#10;4. 确认页面显示欢迎语" />
         </el-form-item>
       </el-form>
       <template #footer>
@@ -153,18 +182,43 @@ import {
   Refresh, VideoPlay, Upload, Back, HomeFilled, Camera, Plus,
 } from '@element-plus/icons-vue'
 
-// ---- 设备 ----
+// ---- 平台与设备 ----
+const platform = ref('android')
 const devices = ref([])
 const serial = ref('')
 const online = ref(false)
 const devSize = ref(null)  // {w, h}
+const appiumState = ref(null)
+// 交互控制（触控/按键/输入/App 管理）仅 Android；iOS 空闲预览只读
+const interactive = computed(() => platform.value === 'android')
+
+function deviceKey(d) { return d.udid || d.serial || d.name || '' }
+function deviceLabel(d) {
+  if (platform.value === 'ios') {
+    const kind = d.kind === 'simulator' ? '模拟器' : '真机'
+    return `${d.name || d.udid}（${kind} · ${d.state}）`
+  }
+  return `${d.serial}（${d.state}）`
+}
+
+async function checkAppium() {
+  try {
+    const { data } = await axios.get('/api/app/appium-status')
+    appiumState.value = data
+  } catch (e) {
+    appiumState.value = { ok: false, error: '状态查询失败' }
+  }
+}
 
 async function loadDevices() {
   try {
-    const { data } = await axios.get('/api/app/devices')
+    const { data } = await axios.get('/api/app/devices', { params: { platform: platform.value } })
     devices.value = data || []
-    if (!serial.value && devices.value.length) serial.value = devices.value[0].serial
+    if (!serial.value || !devices.value.some(d => deviceKey(d) === serial.value)) {
+      serial.value = devices.value.length ? deviceKey(devices.value[0]) : ''
+    }
     await loadStatus()
+    if (platform.value === 'ios') checkAppium()
   } catch (e) {
     ElMessage.error('获取设备失败：' + (e.response?.data?.detail || e.message))
   }
@@ -172,6 +226,14 @@ async function loadDevices() {
 
 async function loadStatus() {
   if (!serial.value) { online.value = false; devSize.value = null; return }
+  if (platform.value === 'ios') {
+    // iOS：状态取设备列表（模拟器 Booted / 真机 connected）；分辨率省略（投屏自适应）
+    const d = devices.value.find(x => deviceKey(x) === serial.value)
+    const st = (d?.state || '').toLowerCase()
+    online.value = st === 'booted' || st === 'connected'
+    devSize.value = null
+    return
+  }
   try {
     const { data } = await axios.get(`/api/app/devices/${serial.value}/status`)
     online.value = !!data.online
@@ -181,11 +243,21 @@ async function loadStatus() {
   }
 }
 
+async function onPlatformChange() {
+  serial.value = ''
+  stopScreen()
+  await loadDevices()
+  if (online.value) {
+    if (interactive.value) loadPackages()
+    startScreen()
+  }
+}
+
 async function onDeviceChange() {
   stopScreen()
   await loadStatus()
   if (online.value) {
-    loadPackages()
+    if (interactive.value) loadPackages()
     startScreen()
   }
 }
@@ -201,7 +273,8 @@ function startScreen() {
   if (!serial.value || !online.value) return
   stopScreen()
   const proto = location.protocol === 'https:' ? 'wss' : 'ws'
-  wsScreen = new WebSocket(`${proto}://${location.host}/ws/app/screen/${serial.value}`)
+  wsScreen = new WebSocket(
+    `${proto}://${location.host}/ws/app/screen/${serial.value}?platform=${platform.value}`)
   wsScreen.binaryType = 'arraybuffer'
   const ctx = canvas.value?.getContext('2d')
   startRenderLoop(ctx)
@@ -248,7 +321,7 @@ function stopRenderLoop() {
   pendingFrame = null; frameDecoding = false
 }
 
-// ---- 触控（鼠标点击 / 拖拽滑动） ----
+// ---- 触控（鼠标点击 / 拖拽滑动，仅 Android） ----
 let downPt = null
 function toDevice(offsetX, offsetY) {
   // offset 相对 canvas 内容盒：canvas 居中于 wrap，需校正其自身像素尺寸
@@ -269,13 +342,13 @@ function evtPos(e) {
 }
 
 function onMouseDown(e) {
-  if (!online.value) return
+  if (!online.value || !interactive.value) return
   const p = evtPos(e)
   downPt = p ? { x: p.x, y: p.y } : null
 }
 function onMouseMove() { /* 预留：绘制滑动轨迹提示线 */ }
 async function onMouseUp(e) {
-  if (!downPt || !online.value) { downPt = null; return }
+  if (!downPt || !online.value || !interactive.value) { downPt = null; return }
   const x1 = downPt.x, y1 = downPt.y
   const p0 = evtPos(e)
   downPt = null
@@ -299,12 +372,14 @@ async function onMouseUp(e) {
 
 // ---- 按键 / 截图 ----
 async function key(code) {
+  if (!interactive.value) { ElMessage.warning('iOS 空闲预览不支持按键'); return }
   try { await axios.post(`/api/app/devices/${serial.value}/keyevent`, { keycode: code }) }
   catch (e) { ElMessage.error('按键失败：' + (e.response?.data?.detail || e.message)) }
 }
 async function snapshot() {
   try {
-    const { data } = await axios.get(`/api/app/devices/${serial.value}/screenshot`)
+    const { data } = await axios.get(`/api/app/devices/${serial.value}/screenshot`,
+                                     { params: { platform: platform.value } })
     const a = document.createElement('a')
     a.href = `data:image/jpeg;base64,${data.data}`
     a.download = `screen_${serial.value}_${Date.now()}.jpg`
@@ -317,7 +392,7 @@ const packages = ref([])
 const uploading = ref(false)
 
 async function loadPackages() {
-  if (!online.value) return
+  if (!online.value || !interactive.value) return
   try {
     const { data } = await axios.get(`/api/app/packages/${serial.value}`)
     packages.value = data || []
@@ -327,7 +402,7 @@ async function loadPackages() {
 }
 
 async function uploadApk(opt) {
-  if (!online.value) { ElMessage.warning('设备不在线'); return }
+  if (!online.value || !interactive.value) { ElMessage.warning('设备不在线'); return }
   uploading.value = true
   const fd = new FormData()
   fd.append('file', opt.file)
@@ -343,6 +418,7 @@ async function uploadApk(opt) {
 }
 
 async function uninstall(pkg) {
+  if (!interactive.value) { ElMessage.warning('iOS 不支持工作台卸载'); return }
   try {
     await ElMessageBox.confirm(`确认卸载 ${pkg}？`, '卸载确认', { type: 'warning' })
     const { data } = await axios.delete(`/api/app/packages/${serial.value}/${pkg}`)
@@ -360,6 +436,7 @@ const launchDlg = ref(false)
 const launchForm = ref({ package: '', activity: '' })
 
 async function doLaunch() {
+  if (!interactive.value) { ElMessage.warning('iOS 启动 App 由用例执行（Appium）完成'); return }
   if (!launchForm.value.package || !launchForm.value.activity) {
     ElMessage.warning('请填写包名和 Activity'); return
   }
@@ -383,11 +460,11 @@ const keycodeMap = {
 }
 
 function focusKbd() {
-  if (online.value) kbd.value?.focus()
+  if (online.value && interactive.value) kbd.value?.focus()
 }
 
 function onKeydown(e) {
-  if (!online.value) return
+  if (!online.value || !interactive.value) return
   const code = keycodeMap[e.key?.toLowerCase?.() || '']
   if (code) {
     e.preventDefault()
@@ -398,7 +475,7 @@ function onKeydown(e) {
 }
 
 async function onKbdInput(e) {
-  if (!online.value) { e.target.value = ''; return }
+  if (!online.value || !interactive.value) { e.target.value = ''; return }
   const text = e.target.value || ''
   e.target.value = ''
   if (!text) return
@@ -408,6 +485,28 @@ async function onKbdInput(e) {
   } catch (err) {
     ElMessage.error('输入失败：' + (err.response?.data?.detail || err.message))
   }
+}
+
+// ---- APP 测试环境 ----
+const appEnvs = ref([])
+
+async function loadEnvs() {
+  try {
+    const { data } = await axios.get('/api/app/envs')
+    appEnvs.value = data || []
+  } catch (e) {
+    appEnvs.value = []
+  }
+}
+
+function envName(id) {
+  const e = appEnvs.value.find(x => x.id === id)
+  return e ? e.name : ''
+}
+
+function envPlatform(id) {
+  const e = appEnvs.value.find(x => x.id === id)
+  return e ? e.platform : ''
 }
 
 // ---- App 用例管理 ----
@@ -425,19 +524,19 @@ async function loadCases() {
 
 // 用例编辑器
 const editorDlg = ref(false)
-const editorForm = ref({ id: null, name: '', app_package: '', device_serial: '' })
+const editorForm = ref({ id: null, name: '', app_env_id: null, device_serial: '' })
 const stepText = ref('')
 
 function openEditor(row) {
   if (row) {
     editorForm.value = {
       id: row.id, name: row.name,
-      app_package: row.app_package || '',
+      app_env_id: row.app_env_id || null,
       device_serial: row.device_serial || '',
     }
     stepText.value = (row.steps || []).map(s => typeof s === 'string' ? s : (s.text || '')).join('\n')
   } else {
-    editorForm.value = { id: null, name: '', app_package: '', device_serial: serial.value }
+    editorForm.value = { id: null, name: '', app_env_id: null, device_serial: '' }
     stepText.value = ''
   }
   editorDlg.value = true
@@ -451,8 +550,10 @@ async function saveCase() {
     module: 'APP',
     steps,
     driver_type: 'app',
-    app_package: editorForm.value.app_package,
-    device_serial: editorForm.value.device_serial || serial.value,
+    app_env_id: editorForm.value.app_env_id,
+    // 未绑环境时（旧字段兼容）缺省取工作台当前 Android 设备；绑了环境则仅作为临时覆盖
+    device_serial: editorForm.value.device_serial
+      || (!editorForm.value.app_env_id && platform.value === 'android' ? serial.value : ''),
   }
   try {
     if (editorForm.value.id) {
@@ -550,11 +651,10 @@ async function stopRun() {
 }
 
 onMounted(async () => {
-  await loadDevices()
-  await loadCases()
+  await Promise.all([loadDevices(), loadCases(), loadEnvs()])
   if (online.value) {
     startScreen()
-    loadPackages()
+    if (interactive.value) loadPackages()
   }
 })
 onBeforeUnmount(() => {
@@ -580,6 +680,8 @@ onBeforeUnmount(() => {
 /* 只显示单个手机竖屏视图：限制最大宽度，不被拉成横向大块 */
 .screen { max-width: 100%; max-height: 100%; width: auto; height: auto; display: block;
           cursor: crosshair; touch-action: none; }
+.screen.no-touch { cursor: default; }
+.ios-tip { margin-top: 6px; }
 .screen-mask { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
                color: #fff; font-size: 14px; }
 /* 隐藏 input：覆盖在投屏上方但完全透明，只负责捕获键盘；不响应鼠标避免挡 canvas 点击 */

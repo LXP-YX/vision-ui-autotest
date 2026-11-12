@@ -52,7 +52,7 @@ from core import crypto  # noqa: E402
 ROOT = Path(__file__).resolve().parent.parent.parent
 SCREENSHOT_DIR = ROOT / "screenshots"
 
-# App 自动化后端（/api/app/* REST + /ws/app/screen/* 投屏），纯 ADB 路线
+# App 自动化后端（/api/app/* REST + /ws/app/screen/* 投屏），Android=ADB / iOS=Appium 双平台
 from app.router import router as app_router  # noqa: E402
 from app.screen_ws import router as app_screen_router  # noqa: E402
 
@@ -84,11 +84,12 @@ class CaseIn(BaseModel):
     tags: list[str] = []
     steps: list = []
     allow_risky: bool = False
-    # APP 自动化（纯 ADB 路线）；driver_type='app' 时由 App 工作台填写
+    # APP 自动化；driver_type='app' 时由 App 工作台填写
     driver_type: str = "web"
-    app_package: str = ""
+    app_env_id: int | None = None  # APP 测试环境（平台+设备+被测 App）
+    app_package: str = ""          # 旧字段：未绑环境时兼容 android
     app_activity: str = ""
-    device_serial: str = ""
+    device_serial: str = ""        # 临时手动覆盖设备（优先于环境 device_id）
 
 
 # ------------------------- 用例 CRUD -------------------------
@@ -225,6 +226,7 @@ def copy_case(case_id: int):
 class GenerateIn(BaseModel):
     requirement: str
     count: int = 3
+    driver_type: str = "web"  # web|app：决定生成提示词的动作集
 
 
 @app.post("/api/cases/generate")
@@ -238,7 +240,7 @@ def generate(body: GenerateIn):
     from generator import generate_cases
     from core.llm_client import LLMError
     try:
-        drafts = generate_cases(body.requirement, body.count)
+        drafts = generate_cases(body.requirement, body.count, driver_type=body.driver_type)
     except LLMError as e:
         raise HTTPException(502, f"AI 生成失败：{e}")
 
@@ -249,6 +251,7 @@ def generate(body: GenerateIn):
                 name=d["name"], module=d.get("module", ""),
                 tags=d.get("tags", []), steps=d["steps"],
                 status="draft", source="ai_requirement",
+                driver_type=body.driver_type,
             )
             s.add(c)
             s.flush()
@@ -316,6 +319,8 @@ def compile_case_script(case_id: int):
         c = s.get(TestCase, case_id)
         if not c:
             raise HTTPException(404, "用例不存在")
+        if (c.driver_type or "web") == "app":
+            raise HTTPException(400, "APP 用例不编译 Playwright 脚本（APP 引擎按自然语言直接执行，无需脚本编译）")
         case_dict = c.to_dict()
 
     def _do_compile():
@@ -362,6 +367,9 @@ def update_case_script_py(case_id: int, body: ScriptPyIn):
         c = s.get(TestCase, case_id)
         if not c:
             raise HTTPException(404, "用例不存在")
+        if (c.driver_type or "web") == "app":
+            raise HTTPException(400, "APP 用例无 Playwright 脚本")
+        c.script_py = body.script_py
         c.script_py = body.script_py
         c.script_updated_at = datetime.now()
         s.commit()

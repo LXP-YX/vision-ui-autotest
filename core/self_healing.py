@@ -32,21 +32,30 @@ except Exception:  # noqa: BLE001
     _DB_OK = False
 
 
-def _store_get(anchor: str) -> Optional[str]:
+def _store_get(anchor: str, env_id: Optional[int] = None) -> Optional[str]:
+    """读知识库：优先环境专属行（env_id 精确），回退全局行（env_id IS NULL）。"""
     if not _DB_OK:
         return None
     with SessionLocal() as s:
-        row = s.query(LocatorRow).filter(LocatorRow.anchor == anchor).first()
+        q = s.query(LocatorRow).filter(LocatorRow.anchor == anchor)
+        row = q.filter(LocatorRow.env_id == env_id).first() if env_id else None
+        if not row:
+            row = q.filter(LocatorRow.env_id.is_(None)).first()
         return row.selector if row and row.selector else None
 
 
-def _store_save(anchor: str, selector: str, strategy: str, hit: bool) -> None:
+def _store_save(anchor: str, selector: str, strategy: str, hit: bool,
+                env_id: Optional[int] = None) -> None:
     if not _DB_OK:
         return
     with SessionLocal() as s:
-        row = s.query(LocatorRow).filter(LocatorRow.anchor == anchor).first()
+        q = s.query(LocatorRow).filter(LocatorRow.anchor == anchor)
+        row = q.filter(LocatorRow.env_id == env_id).first() if env_id else None
         if not row:
-            row = LocatorRow(anchor=anchor, selector=selector, strategy=strategy)
+            row = q.filter(LocatorRow.env_id.is_(None)).first()
+        if not row:
+            row = LocatorRow(anchor=anchor, selector=selector, strategy=strategy,
+                             env_id=env_id)
             s.add(row)
         else:
             row.selector = selector
@@ -91,13 +100,16 @@ def _hint_to_selector(hint: dict) -> str | None:
 
 def find_element(page: Page, anchor: str,
                  semantic_hint: Optional[str] = None,
-                 locator_hint: Optional[dict] = None) -> Optional[dict]:
+                 locator_hint: Optional[dict] = None,
+                 env_id: Optional[int] = None) -> Optional[dict]:
     """三级定位 + 自愈回写。
 
     Args:
         anchor:        目标元素的自然语言描述（知识库主键）。
         semantic_hint: 可选，语义定位用的文本（默认取 anchor）。
         locator_hint:  可选，用户手动指定的精确定位 {type, value}，优先级最高。
+        env_id:        可选，WEB 测试环境 id（test_env.id），知识库按环境隔离；
+                       缺省读写全局行（env_id IS NULL）。
     Returns:
         {selector, strategy} 命中信息；彻底找不到返回 None。
     """
@@ -113,9 +125,9 @@ def find_element(page: Page, anchor: str,
     hint = semantic_hint or anchor
 
     # ① Store 命中
-    cached = _store_get(anchor)
+    cached = _store_get(anchor, env_id)
     if cached and _try_selector(page, cached):
-        _store_save(anchor, cached, "store", hit=True)
+        _store_save(anchor, cached, "store", hit=True, env_id=env_id)
         return {"selector": cached, "strategy": "store"}
 
     # ② 语义定位：精确 → 去后缀精确 → 包含匹配（均限可见节点）
@@ -126,18 +138,18 @@ def find_element(page: Page, anchor: str,
         f":visible:has-text(\"{core}\")",
     ):
         if _try_selector(page, sel):
-            _store_save(anchor, sel, "semantic", hit=True)
+            _store_save(anchor, sel, "semantic", hit=True, env_id=env_id)
             return {"selector": sel, "strategy": "semantic"}
 
     # ③ VLM 视觉定位 → 生成稳定选择器 → 回验命中元素是否与目标相关 → 回写
     healed = vision.locate(page, anchor)
     if healed and _try_selector(page, healed) and _verify_hit(page, healed, core):
-        _store_save(anchor, healed, "vlm", hit=True)
+        _store_save(anchor, healed, "vlm", hit=True, env_id=env_id)
         return {"selector": healed, "strategy": "vlm"}
 
     # 三级都失败：元素可能确实不存在 —— 判为功能缺陷，不伪造
     if cached:
-        _store_save(anchor, cached, "store", hit=False)
+        _store_save(anchor, cached, "store", hit=False, env_id=env_id)
     return None
 
 

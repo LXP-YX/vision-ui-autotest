@@ -38,6 +38,20 @@ _SYSTEM = (
     + (f"可参考站点菜单结构：\n{json.dumps(_MENU_HINT, ensure_ascii=False)}" if _MENU_HINT else "")
 )
 
+# APP 用例生成系统提示（动作集与 core_app/planner 对齐）
+_APP_SYSTEM = (
+    "你是 App 自动化测试用例设计师，为当前被测 App（Android/iOS 原生应用）设计中文测试用例。\n"
+    "每条用例包含若干中文步骤。步骤必须只使用以下可执行动作，用自然语言表达：\n"
+    "1) 启动 App：写『启动被测 App』（通常为首步）；\n"
+    "2) 点击：写『点击 X』（X 为按钮/图标/列表项/Tab 等元素）；\n"
+    "3) 输入：写『在 X 输入 Y』（X 为输入框元素，Y 为内容）；\n"
+    "4) 滑动：写『上滑』『下滑』『左滑』『右滑』；\n"
+    "5) 按键：写『按返回键』『按 HOME 键』；\n"
+    "6) 视觉断言：写『确认 X』（X 为界面上应出现的内容）；\n"
+    "7) 等待：写『等待 N 秒』。\n"
+    "严格遵守只读原则：只做查看/浏览/搜索/断言，绝不生成新增/新建/删除/提交/保存/上传等破坏性操作。"
+)
+
 _TOOL = [{
     "type": "function",
     "function": {
@@ -79,18 +93,19 @@ def _is_risky(step: str) -> bool:
     return any(k in step for k in _RISKY)
 
 
-def generate_cases(requirement: str, count: int = 3) -> list[dict]:
-    """根据需求描述生成用例草稿列表。
+def generate_cases(requirement: str, count: int = 3, driver_type: str = "web") -> list[dict]:
+    """根据需求描述生成用例草稿列表（driver_type='app' 走 APP 动作集提示）。
 
     Returns:
         [{name, module, tags, steps}]；失败抛 LLMError。
     """
+    system = _APP_SYSTEM if (driver_type or "web") == "app" else _SYSTEM
     user = (
         f"请针对以下测试需求，设计约 {count} 条测试用例：\n{requirement}\n"
         "调用 emit_cases 返回结果，不要输出多余文字。"
     )
     msg = get_client().chat(
-        messages=[{"role": "system", "content": _SYSTEM}, {"role": "user", "content": user}],
+        messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
         tools=_TOOL,
     )
     tool_calls = msg.get("tool_calls") or []

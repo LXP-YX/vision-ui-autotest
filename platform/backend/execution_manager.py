@@ -31,7 +31,7 @@ from db import (  # noqa: E402
     ExecutionScreenshot,
     SessionLocal,
 )
-from runner import run_case  # noqa: E402
+from runner_dispatch import run_any_case  # noqa: E402  WEB/APP 分流分发器
 
 
 class ExecutionSession:
@@ -168,7 +168,7 @@ def _run_template(session: ExecutionSession) -> None:
 
         def _do_run():
             try:
-                result_box["result"] = run_case(case, emit=wrapped_emit)
+                result_box["result"] = run_any_case(case, emit=wrapped_emit)
             except Exception as e:  # noqa: BLE001
                 result_box["error"] = str(e)
 

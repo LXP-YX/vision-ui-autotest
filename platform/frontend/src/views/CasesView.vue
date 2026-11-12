@@ -473,7 +473,8 @@ const statusType = computed(() => ({ passed: 'success', failed: 'danger', error:
 
 async function loadCases() {
   const { data } = await axios.get('/api/cases')
-  setCases(data)
+  // 用例管理页仅展示 WEB 用例；APP 用例在「APP 工作台」维护（页面隔离）
+  setCases((data || []).filter(c => (c.driver_type || 'web') === 'web'))
 }
 
 // 列表展示：兼容字符串 / 对象两种步骤形态

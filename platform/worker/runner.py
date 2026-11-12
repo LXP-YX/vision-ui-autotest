@@ -73,8 +73,10 @@ def _do_click(main: MainPage, target: str, emit: EventCb,
     locator_hint: 用户手动指定的精确定位 {type, value}，优先于三级定位。
     命中的 selector/strategy 写入 ctx['_rec']（供脚本编译记录本步实际用的选择器）。
     """
+    from core import config as _cfg
     from core import self_healing
-    hit = self_healing.find_element(main.page, target, locator_hint=locator_hint)
+    hit = self_healing.find_element(main.page, target, locator_hint=locator_hint,
+                                    env_id=_cfg.default_env_id())
     if not hit:
         # 三级都找不到 —— 判为功能缺陷，不伪造
         raise AssertionError(f"未找到元素「{target}」（Store/语义/VLM 均失败，疑为功能缺陷）")
@@ -800,10 +802,10 @@ def _run_playwright_script(
 
 def run_case(case: dict, emit: EventCb = _noop, run_id: int | None = None,
              cancel_event=None) -> dict:
-    """执行一条用例：按 driver_type 分流到对应引擎。
+    """执行一条 WEB 用例：Playwright 无头 Chromium + CDP 实时投屏。
 
-    - driver_type='app' → core_app.app_runner.run_app_case（纯 ADB，无头/有头均无）；
-    - 其余（缺省 'web'）→ Playwright 无头 Chromium + CDP 实时投屏。
+    （APP 用例不再经由本模块分流——分叉已上提至 runner_dispatch.py，
+    本函数只负责 driver_type='web' 的执行。）
 
     Web 执行策略（三模式）：
     1. 有 script_py → 直接跑 Playwright 脚本（快）；selector 漂移则重走模式2；
@@ -812,16 +814,12 @@ def run_case(case: dict, emit: EventCb = _noop, run_id: int | None = None,
     3. NL 执行也失败 → 直接返回失败。
 
     Args:
-        case: {id,name,steps,driver_type?,device_serial?,...}
+        case: {id,name,steps,driver_type?,...}
         emit: 事件回调（step / frame / log / heal / done）
         cancel_event: threading.Event，set 时中止执行（可选）
     Returns:
         {status, step_results, screenshots, error}
     """
-    # ── App 用例分流：纯 ADB 引擎（无 Playwright） ───────────────────────
-    if (case.get("driver_type") or "web") == "app":
-        from core_app.app_runner import run_app_case
-        return run_app_case(case, emit=emit, run_id=run_id, cancel_event=cancel_event)
 
     # ── 模式1：有 Playwright 脚本，直接回放 ────────────────────────────────
     script_py: str | None = case.get("script_py")

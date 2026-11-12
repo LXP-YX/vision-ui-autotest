@@ -25,7 +25,13 @@ CREATE TABLE IF NOT EXISTS `test_case` (
   `status`      VARCHAR(20) DEFAULT 'active' COMMENT 'draft|active',
   `source`      VARCHAR(30) DEFAULT 'human' COMMENT 'human|ai_*',
   `script`      JSON NULL COMMENT '结构化执行脚本（编译产物），null=未编译',
+  `script_py`   TEXT NULL COMMENT 'Playwright Python 脚本（AI 编译产物）',
   `script_updated_at` DATETIME NULL COMMENT '脚本编译/自愈时间',
+  `driver_type` VARCHAR(20) DEFAULT 'web' COMMENT 'web|app',
+  `app_package` VARCHAR(200) DEFAULT '' COMMENT 'APP 包名（旧字段，未绑环境时兼容 android）',
+  `app_activity` VARCHAR(200) DEFAULT '' COMMENT 'APP 启动 Activity（旧字段）',
+  `device_serial` VARCHAR(100) DEFAULT '' COMMENT '设备序号（旧字段，保留作临时手动覆盖）',
+  `app_env_id`  INT NULL COMMENT '关联 app_env.id（APP 测试环境）',
   `created_at`  DATETIME DEFAULT CURRENT_TIMESTAMP,
   `updated_at`  DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`)
@@ -65,16 +71,50 @@ CREATE TABLE IF NOT EXISTS `llm_config` (
 
 -- 自愈知识库表（自然语言锚点 → 稳定选择器）
 CREATE TABLE IF NOT EXISTS `locator` (
+  `id`           INT NOT NULL AUTO_INCREMENT,
+  `anchor`       VARCHAR(300) NOT NULL COMMENT '自然语言锚点描述',
+  `selector`     VARCHAR(500) DEFAULT '' COMMENT '稳定选择器（Playwright）',
+  `strategy`     VARCHAR(20) DEFAULT 'store' COMMENT 'store|semantic|vlm',
+  `hit_count`    INT DEFAULT 0,
+  `fail_count`   INT DEFAULT 0,
+  `element_type` VARCHAR(50) DEFAULT '' COMMENT 'AI 分类：一级菜单/按钮/输入框等',
+  `env_id`       INT NULL COMMENT '关联 test_env.id，NULL=全局通用',
+  `updated_at`   DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `idx_anchor` (`anchor`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='WEB 脚本自愈知识库';
+
+-- APP 自愈知识库表（与 WEB 的 locator 表级拆分；selector 存 JSON {"by","value"}）
+CREATE TABLE IF NOT EXISTS `app_locator` (
   `id`         INT NOT NULL AUTO_INCREMENT,
   `anchor`     VARCHAR(300) NOT NULL COMMENT '自然语言锚点描述',
-  `selector`   VARCHAR(500) DEFAULT '' COMMENT '稳定选择器',
-  `strategy`   VARCHAR(20) DEFAULT 'store' COMMENT 'store|semantic|vlm',
+  `selector`   VARCHAR(500) DEFAULT '' COMMENT '结构化定位 JSON {"by","value"}',
+  `strategy`   VARCHAR(20) DEFAULT 'store' COMMENT 'store|xml|vlm',
+  `platform`   VARCHAR(10) NULL COMMENT 'android|ios，NULL=平台通用',
+  `env_id`     INT NULL COMMENT '关联 app_env.id，NULL=全局通用',
   `hit_count`  INT DEFAULT 0,
   `fail_count` INT DEFAULT 0,
   `updated_at` DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`),
-  KEY `idx_anchor` (`anchor`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='脚本自愈知识库';
+  KEY `idx_app_loc_anchor` (`anchor`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='APP 脚本自愈知识库';
+
+-- APP 测试环境表（平台+设备+被测 App 绑成一套环境，与 WEB 的 test_env 独立）
+CREATE TABLE IF NOT EXISTS `app_env` (
+  `id`           INT NOT NULL AUTO_INCREMENT,
+  `name`         VARCHAR(100) NOT NULL COMMENT '环境名',
+  `platform`     VARCHAR(10) DEFAULT 'android' COMMENT 'android|ios',
+  `device_id`    VARCHAR(100) DEFAULT '' COMMENT '设备序号 serial / iOS 设备标识 udid',
+  `app_id`       VARCHAR(200) DEFAULT '' COMMENT '被测 App：package / bundle_id',
+  `app_activity` VARCHAR(200) DEFAULT '' COMMENT 'Android 启动 Activity，iOS 留空',
+  `username`     VARCHAR(100) DEFAULT '' COMMENT '可选登录账号',
+  `password`     VARCHAR(200) DEFAULT '' COMMENT '可选登录密码',
+  `remark`       VARCHAR(300) DEFAULT '' COMMENT '备注',
+  `is_default`   TINYINT(1) DEFAULT 0 COMMENT '是否默认环境',
+  `created_at`   DATETIME DEFAULT CURRENT_TIMESTAMP,
+  `updated_at`   DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='APP 测试环境';
 
 -- 接口库表（可复用的单个接口定义）
 CREATE TABLE IF NOT EXISTS `api_definition` (

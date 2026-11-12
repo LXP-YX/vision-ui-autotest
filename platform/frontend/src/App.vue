@@ -16,6 +16,10 @@
           <el-icon><Cellphone /></el-icon>
           <span>APP 工作台</span>
         </el-menu-item>
+        <el-menu-item index="/app-env">
+          <el-icon><Iphone /></el-icon>
+          <span>APP 测试环境</span>
+        </el-menu-item>
         <el-menu-item index="/api-testing">
           <el-icon><Connection /></el-icon>
           <span>接口管理</span>

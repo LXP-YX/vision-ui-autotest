@@ -90,12 +90,14 @@ class TestCase(Base):
     # Playwright Python 脚本（AI 编译产物）：由 script_compiler 从 steps 生成。
     script_py: Mapped[str] = mapped_column(Text, nullable=True, default=None)
     script_updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
-    # APP 自动化（纯 ADB 路线）：driver_type='app' 走 core_app，缺省 'web' 走 Playwright。
-    # 仅 driver_type='app' 时 app_package/app_activity/device_serial 才有意义。
+    # APP 自动化：driver_type='app' 走 core_app，缺省 'web' 走 Playwright。
+    # app_env_id 绑定 app_env 环境（平台+设备+App）；device_serial 保留为临时手动覆盖。
+    # app_package/app_activity 为旧字段，仅当用例未绑环境时兼容使用（android）。
     driver_type: Mapped[str] = mapped_column(String(20), default="web")
     app_package: Mapped[str] = mapped_column(String(200), default="")
     app_activity: Mapped[str] = mapped_column(String(200), default="")
     device_serial: Mapped[str] = mapped_column(String(100), default="")
+    app_env_id: Mapped[int] = mapped_column(Integer, nullable=True)  # 关联 app_env.id
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.now, onupdate=datetime.now
@@ -118,6 +120,7 @@ class TestCase(Base):
             "app_package": self.app_package or "",
             "app_activity": self.app_activity or "",
             "device_serial": self.device_serial or "",
+            "app_env_id": self.app_env_id,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
         }
@@ -196,7 +199,12 @@ class LLMConfig(Base):
 
 
 class Locator(Base):
-    """自愈知识库：自然语言锚点 → 稳定选择器（跨 run 共享）。"""
+    """WEB 自愈知识库：自然语言锚点 → 稳定选择器（跨 run 共享）。
+
+    与 APP 的自愈知识库（app_locator 表）表级拆分，互不混存：
+    本表仅存 Playwright 选择器串；env_id 区分 WEB 测试环境（test_env.id），
+    NULL 表示全局通用（旧数据/与环境无关的锚点）。
+    """
 
     __tablename__ = "locator"
 
@@ -207,6 +215,7 @@ class Locator(Base):
     hit_count: Mapped[int] = mapped_column(Integer, default=0)
     fail_count: Mapped[int] = mapped_column(Integer, default=0)
     element_type: Mapped[str] = mapped_column(String(50), default="")  # AI 分类：一级菜单/按钮/输入框等
+    env_id: Mapped[int] = mapped_column(Integer, nullable=True)  # 关联 test_env.id，NULL=全局
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.now, onupdate=datetime.now
     )
@@ -220,6 +229,45 @@ class Locator(Base):
             "hit_count": self.hit_count,
             "fail_count": self.fail_count,
             "element_type": self.element_type or "",
+            "env_id": self.env_id,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+
+class AppLocator(Base):
+    """APP 自愈知识库（与 WEB 的 locator 表级拆分）：自然语言锚点 → 结构化定位。
+
+    selector 存 JSON 字符串 {"by":..,"value":..}，by ∈ text/desc/resource_id；
+    strategy ∈ store|xml|vlm；platform ∈ android|ios（NULL=平台通用）；
+    env_id 关联 app_env.id（NULL=全局通用，与环境无关的锚点）。
+    """
+
+    __tablename__ = "app_locator"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    anchor: Mapped[str] = mapped_column(String(300), nullable=False)  # 自然语言描述
+    selector: Mapped[str] = mapped_column(String(500), default="")  # JSON {"by","value"}
+    strategy: Mapped[str] = mapped_column(String(20), default="store")  # store|xml|vlm
+    platform: Mapped[str] = mapped_column(String(10), nullable=True)  # android|ios，NULL=通用
+    env_id: Mapped[int] = mapped_column(Integer, nullable=True)  # 关联 app_env.id，NULL=全局
+    hit_count: Mapped[int] = mapped_column(Integer, default=0)
+    fail_count: Mapped[int] = mapped_column(Integer, default=0)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.now, onupdate=datetime.now
+    )
+
+    __table_args__ = (Index("idx_app_loc_anchor", "anchor"),)
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "anchor": self.anchor,
+            "selector": self.selector,
+            "strategy": self.strategy,
+            "platform": self.platform,
+            "env_id": self.env_id,
+            "hit_count": self.hit_count,
+            "fail_count": self.fail_count,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
         }
 
@@ -259,6 +307,51 @@ class TestEnv(Base):
             "id": self.id, "name": self.name, "base_url": self.base_url,
             "username": self.username,
             "password": pwd, "is_default": self.is_default,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+
+class AppEnv(Base):
+    """APP 测试环境：平台 + 设备 + 被测 App（+ 可选登录账号）绑成一套环境。
+
+    与 WEB 的 test_env 完全独立。执行 APP 用例时按 app_env_id 取环境：
+    platform 决定驱动实现（android=ADB / ios=Appium），device_id 为
+    设备序号（serial）或 iOS 设备标识（udid）。
+    """
+
+    __tablename__ = "app_env"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    platform: Mapped[str] = mapped_column(String(10), default="android")  # android|ios
+    device_id: Mapped[str] = mapped_column(String(100), default="")  # serial / udid
+    app_id: Mapped[str] = mapped_column(String(200), default="")  # package / bundle_id
+    app_activity: Mapped[str] = mapped_column(String(200), default="")  # Android 启动 Activity，iOS 留空
+    username: Mapped[str] = mapped_column(String(100), default="")  # 可选登录账号
+    password: Mapped[str] = mapped_column(String(200), default="")  # 可选登录密码
+    remark: Mapped[str] = mapped_column(String(300), default="")
+    is_default: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.now, onupdate=datetime.now
+    )
+
+    def to_dict(self, mask: bool = True) -> dict:
+        pwd = self.password or ""
+        if mask and pwd:
+            pwd = "****"
+        return {
+            "id": self.id,
+            "name": self.name,
+            "platform": self.platform or "android",
+            "device_id": self.device_id or "",
+            "app_id": self.app_id or "",
+            "app_activity": self.app_activity or "",
+            "username": self.username or "",
+            "password": pwd,
+            "remark": self.remark or "",
+            "is_default": bool(self.is_default),
+            "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
         }
 
@@ -555,11 +648,14 @@ def _migrate_add_columns() -> None:
         ("test_case", "script", "JSON NULL"),
         ("test_case", "script_py", "TEXT NULL"),
         ("test_case", "script_updated_at", "DATETIME NULL"),
-        # APP 自动化（纯 ADB 路线）：driver_type 缺省 web；app_* 仅 driver_type=app 时使用
+        # APP 自动化：driver_type 缺省 web；app_* 仅 driver_type=app 时使用
         ("test_case", "driver_type", "VARCHAR(20) DEFAULT 'web'"),
         ("test_case", "app_package", "VARCHAR(200) DEFAULT ''"),
         ("test_case", "app_activity", "VARCHAR(200) DEFAULT ''"),
         ("test_case", "device_serial", "VARCHAR(100) DEFAULT ''"),
+        # WEB/APP 解耦：自愈知识库加环境维度；用例绑定 APP 测试环境
+        ("locator", "env_id", "INTEGER NULL"),
+        ("test_case", "app_env_id", "INTEGER NULL"),
     ]
     insp = inspect(ENGINE)
     for table, column, ddl in specs:

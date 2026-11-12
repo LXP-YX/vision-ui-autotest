@@ -15,7 +15,7 @@ import struct
 import zlib
 from typing import Optional
 
-from core_app import adb_bridge
+from core_app.drivers.android import adb as adb_bridge
 
 # ------------------------- zip 分片读取 -------------------------
 

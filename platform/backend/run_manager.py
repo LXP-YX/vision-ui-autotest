@@ -20,7 +20,7 @@ if str(_WORKER_DIR) not in sys.path:
     sys.path.insert(0, str(_WORKER_DIR))
 
 from db import SessionLocal, TestRun
-from runner import run_case
+from runner_dispatch import run_any_case  # WEB/APP 分流分发器（惰性加载引擎）
 
 
 class RunSession:
@@ -66,8 +66,8 @@ def start_run(run_id: int, case: dict) -> RunSession:
     def _worker():
         _update_run(run_id, status="running", started_at=datetime.now())
         try:
-            result = run_case(case, emit=session.emit, run_id=run_id,
-                              cancel_event=session.cancelled)
+            result = run_any_case(case, emit=session.emit, run_id=run_id,
+                                  cancel_event=session.cancelled)
             session.result = result
             final_status = result["status"]
             _update_run(

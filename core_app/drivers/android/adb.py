@@ -1,4 +1,4 @@
-"""ADB 命令封装：设备管理 / 截图 / 触控 / 按键 / 输入 / App 管理 / UI dump。
+"""ADB 命令封装（Android）：设备管理 / 截图 / 触控 / 按键 / 输入 / App 管理 / UI dump。
 
 设计要点：
 - 纯 stdlib（subprocess），不引入第三方 Appium/Node 依赖；
@@ -230,6 +230,12 @@ def start_app(serial: str, package: str, activity: str) -> None:
     _adb("-s", serial, "shell", "am", "start", "-n", comp)
 
 
+def start_app_by_package(serial: str, package: str) -> None:
+    """按包名启动 App 默认 Activity（monkey），activity 未知时使用。"""
+    _adb("-s", serial, "shell", "monkey", "-p", package,
+         "-c", "android.intent.category.LAUNCHER", "1")
+
+
 def stop_app(serial: str, package: str) -> None:
     """强制停止 App。"""
     _adb("-s", serial, "shell", "am", "force-stop", package)
@@ -242,7 +248,7 @@ def dump_ui(serial: str) -> str:
 
     dump 默认写到设备 /sdcard/window_dump.xml，再 exec-out cat 回文本。
     XML 的 <node> 节点带 resource-id / text / content-desc / bounds / class 属性，
-    供 self_healing 做 resource-id / 文本 / content-desc 语义定位。
+    由 android.ui_parser 归一化为 UiNode 供语义定位。
     """
     remote = "/sdcard/window_dump.xml"
     # dump 失败时（如设备繁忙）输出含 "ERROR"，按异常处理

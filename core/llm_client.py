@@ -173,3 +173,33 @@ def get_client(reload: bool = False) -> LLMClient:
     if _client is None or reload:
         _client = LLMClient(_load_db_default_cfg())
     return _client
+
+
+def plan_with_tools(step: str, system: str, tools: list[dict]) -> Optional[dict]:
+    """通用 function-call 步骤解析骨架（WEB / APP Planner 共用）。
+
+    把一条中文步骤交给模型在 tools 动作集中选择，返回 {"action": fn_name, "args": {...}}；
+    LLM 不可用（LLMError）或未返回工具调用时返回 None（调用方回退规则式解析）。
+    """
+    try:
+        msg = get_client().chat(
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": step},
+            ],
+            tools=tools,
+        )
+    except LLMError:
+        return None
+    tool_calls = msg.get("tool_calls") or []
+    if not tool_calls:
+        return None
+    fn = tool_calls[0].get("function", {})
+    name = fn.get("name")
+    if not name:
+        return None
+    try:
+        args = json.loads(fn.get("arguments") or "{}")
+    except (json.JSONDecodeError, TypeError):
+        args = {}
+    return {"action": name, "args": args}

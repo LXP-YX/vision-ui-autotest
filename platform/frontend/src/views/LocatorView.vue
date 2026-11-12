@@ -1,8 +1,8 @@
 <template>
   <div>
     <el-tabs v-model="tab">
-      <!-- ================= 自愈知识库 ================= -->
-      <el-tab-pane label="自愈知识库" name="locator">
+      <!-- ================= WEB 自愈知识库 ================= -->
+      <el-tab-pane label="WEB 知识库" name="locator">
         <div class="bar">
           <span class="sec-title">自愈知识库</span>
           <span class="bar-actions">
@@ -50,6 +50,58 @@
           </el-table-column>
         </el-table>
         <el-empty v-if="!locators.length" description="暂无自愈记录（执行含视觉定位的用例后会自动积累）" />
+      </el-tab-pane>
+
+      <!-- ================= APP 自愈知识库（app_locator 表） ================= -->
+      <el-tab-pane label="APP 知识库" name="app">
+        <div class="bar">
+          <span class="sec-title">APP 自愈知识库</span>
+          <span class="bar-actions">
+            <el-select v-model="appPlatformFilter" placeholder="全部平台" size="small" style="width:130px" clearable @change="loadApp">
+              <el-option label="Android" value="android" />
+              <el-option label="iOS" value="ios" />
+            </el-select>
+            <el-button size="small" @click="loadApp">刷新</el-button>
+            <el-button size="small" type="danger" :disabled="!appSelection.length"
+                       @click="onAppBatchDelete">删除选中{{ appSelection.length ? `（${appSelection.length}）` : '' }}</el-button>
+          </span>
+        </div>
+        <p class="desc">APP 自然语言锚点 → 结构化定位 {"by","value"} 的映射（与 WEB 知识库分表存储）。按平台与环境维度隔离：同一锚点在 Android / iOS / 不同环境下互不干扰。</p>
+        <el-table :data="appLocators" border size="small"
+                  :default-sort="{ prop: 'id', order: 'ascending' }"
+                  @sort-change="onAppSortChange"
+                  @selection-change="onAppSelectionChange">
+          <el-table-column type="selection" width="42" />
+          <el-table-column label="" width="52" sortable="custom" prop="id" align="center" header-align="center">
+            <template #default="{ row }">{{ appIndexOf(row) }}</template>
+          </el-table-column>
+          <el-table-column prop="anchor" label="锚点（自然语言）" min-width="150" />
+          <el-table-column prop="selector" label="结构化定位" min-width="190" show-overflow-tooltip />
+          <el-table-column label="策略" width="88">
+            <template #default="{ row }">
+              <el-tag size="small" :type="appStrategyType(row.strategy)">{{ appStrategyLabel(row.strategy) }}</el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column label="平台" width="88">
+            <template #default="{ row }">
+              <el-tag v-if="row.platform" size="small" :type="row.platform === 'ios' ? 'warning' : 'success'">
+                {{ row.platform === 'ios' ? 'iOS' : 'Android' }}
+              </el-tag>
+              <span v-else class="dim">通用</span>
+            </template>
+          </el-table-column>
+          <el-table-column prop="hit_count" label="命中" width="58" />
+          <el-table-column prop="fail_count" label="失败" width="58" />
+          <el-table-column label="更新时间" min-width="148">
+            <template #default="{ row }">{{ (row.updated_at || '').replace('T', ' ').slice(0, 19) }}</template>
+          </el-table-column>
+          <el-table-column label="操作" width="80">
+            <template #default="{ row }">
+              <el-button size="small" type="danger" plain @click="removeAppOne(row)">删除</el-button>
+            </template>
+          </el-table-column>
+        </el-table>
+        <el-empty v-if="!appLocators.length" description="暂无 APP 自愈记录（执行 APP 用例后会自动积累）" />
       </el-tab-pane>
     </el-tabs>
   </div>
@@ -137,7 +189,48 @@ async function onClassifyAll() {
   }
 }
 
-onMounted(load)
+// ---- APP 知识库（app_locator） ----
+const appPlatformFilter = ref(null)
+const { items: appLocators, setItems: setAppLocators, onSortChange: onAppSortChange,
+        indexOf: appIndexOf } = useIdSort()
+const { selection: appSelection, onSelectionChange: onAppSelectionChange,
+        batchDelete: appBatchDelete, confirmRemove: appConfirmRemove } = useMultiSelect()
+
+function appStrategyType(s) {
+  return { store: 'info', xml: 'success', vlm: 'warning', hint: '' }[s] || 'info'
+}
+
+function appStrategyLabel(s) {
+  return { store: '知识库', xml: '语义匹配', vlm: '视觉定位', hint: '手动指定' }[s] || s
+}
+
+async function loadApp() {
+  try {
+    const { data } = await axios.get('/api/app/locators', {
+      params: appPlatformFilter.value ? { platform: appPlatformFilter.value } : {},
+    })
+    setAppLocators(data)
+  } catch (e) {
+    appLocators.value = []
+  }
+}
+
+async function removeAppOne(row) {
+  if (!(await appConfirmRemove({ label: 'APP 自愈记录', name: row.anchor }))) return
+  await axios.delete(`/api/app/locators/${row.id}`)
+  ElMessage.success('已删除'); loadApp()
+}
+
+function onAppBatchDelete() {
+  appBatchDelete({
+    label: 'APP 自愈记录',
+    nameOf: r => r.anchor,
+    deleteOne: r => axios.delete(`/api/app/locators/${r.id}`),
+    onDone: loadApp,
+  })
+}
+
+onMounted(() => { load(); loadApp() })
 </script>
 
 <style scoped>
@@ -154,4 +247,5 @@ onMounted(load)
   color: #67c23a;
   border: 1px solid #b3e19d;
 }
+.dim { color: #909399; font-size: 12px; }
 </style>
