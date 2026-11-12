@@ -26,6 +26,8 @@ class _Session:
         self.sid = sid
         self.events: "queue.Queue[dict]" = queue.Queue()
         self.rec = RecordSession(sid, self._emit)
+        # 停止后读到的 codegen 脚本（cleanup 删文件前的快照），供 stop 接口用
+        self.script: Optional[str] = None
 
     def _emit(self, kind: str, payload: dict) -> None:
         self.events.put({"kind": kind, "payload": payload})
@@ -43,11 +45,12 @@ class _Session:
         """停止录制并翻译 codegen 脚本为用例草稿。"""
         self.rec.send_command({"type": "stop"})
         self.rec.stopped.wait(timeout=15)
-        script = self.rec.get_script()
+        # 进程退出后 codegen 才完整落盘，此时再读；读到即缓存，cleanup 后仍可用
+        self.script = self.rec.get_script()
         self.rec.cleanup()
-        if not script:
+        if not self.script:
             return []
-        return translate_script(script)
+        return translate_script(self.script)
 
 
 _SESSIONS: Dict[int, _Session] = {}

@@ -29,10 +29,10 @@ api:
   auth_prefix: "Bearer "
 
 # ---- 以下两段供「无平台单机模式」使用：平台 DB 不可用时回退读取 ----
-# 站点信息（优先由平台「测试数据管理」页面维护，落 DB）
+# 站点信息（优先由平台「测试环境管理」页面维护，落 DB）
+# base_url 填打开即用的地址（一般就是登录页）；已取消独立的登录路径字段
 site:
-  base_url: "https://your-site.example.com"
-  login_path: "/login"
+  base_url: "https://your-site.example.com/login"   # 旧的 login_path 仍可识别，会自动并到 base_url
 
 # 站点账号（建议 ${ENV_VAR} 注入，不要提交明文）
 account:

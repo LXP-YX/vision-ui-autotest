@@ -25,8 +25,10 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 from pathlib import Path
 from typing import Callable, Optional
+from urllib.parse import urlparse
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 if str(ROOT) not in sys.path:
@@ -35,6 +37,12 @@ if str(ROOT) not in sys.path:
 from core import config  # noqa: E402
 
 EventCb = Callable[[str, dict], None]
+
+# codegen 启动后此时长内非零退出 = 启动即崩溃（浏览器未安装 / 版本不匹配等），
+# 不能当成「用户关闭了浏览器」，否则前端只看到误导的「已关闭」而无真实原因。
+_STARTUP_GRACE = 5.0
+# 保留 codegen 输出的尾部行数，供错误信息截取
+_LOG_TAIL_LINES = 30
 
 
 class RecordSession:
@@ -49,9 +57,15 @@ class RecordSession:
         self.error: Optional[str] = None
         self._thread: Optional[threading.Thread] = None
         self._proc: Optional[subprocess.Popen] = None
+        self._out_thread: Optional[threading.Thread] = None
         self._script_file: Optional[Path] = None
         # segment 切分：用户点「标记分段」时往脚本追加注释标记
         self._segments: int = 0
+        # codegen 子进程输出（stdout+stderr 合并）尾部，启动失败时用于定位原因
+        self._proc_log: list[str] = []
+        self._started_at: float = 0.0
+        # 终止 codegen 前的脚本快照：SIGTERM 下 codegen 最后一次落盘可能丢失
+        self._script_snapshot: Optional[str] = None
 
     def start(self) -> None:
         self._thread = threading.Thread(target=self._run, daemon=True)
@@ -61,8 +75,7 @@ class RecordSession:
         """有效指令：{"type":"stop"} 结束；{"type":"mark"} 切分用例。"""
         self.commands.put(cmd)
 
-    def get_script(self) -> Optional[str]:
-        """返回 codegen 生成的 Python 脚本内容（停止后读取）。"""
+    def _read_script_file(self) -> Optional[str]:
         if self._script_file and self._script_file.exists():
             try:
                 return self._script_file.read_text(encoding="utf-8")
@@ -70,12 +83,77 @@ class RecordSession:
                 return None
         return None
 
+    def get_script(self) -> Optional[str]:
+        """返回 codegen 生成的 Python 脚本内容（停止后读取）。
+
+        codegen 边录边写 --output，但被 SIGTERM 打断时末尾内容可能没落盘，
+        故取「终止前快照」与「当前文件」中更长的一份。
+        """
+        current = self._read_script_file()
+        if self._script_snapshot and (not current or len(self._script_snapshot) > len(current)):
+            return self._script_snapshot
+        return current
+
+    def _snapshot_script(self) -> None:
+        """杀掉 codegen 前先存一份磁盘快照。"""
+        self._script_snapshot = self._read_script_file()
+
     def cleanup(self) -> None:
         if self._script_file:
             try:
                 self._script_file.unlink(missing_ok=True)
             except Exception:
                 pass
+
+    def log_tail(self, wait: float = 2.0) -> str:
+        """codegen 输出尾部文本；wait 给读线程时间收完崩溃前的最后几行。"""
+        if self._out_thread and self._out_thread.is_alive():
+            self._out_thread.join(timeout=wait)
+        return "\n".join(self._proc_log[-_LOG_TAIL_LINES:]).strip()
+
+    def summarize_error(self) -> str:
+        """从 codegen 输出里抓最能说明问题的一行（如浏览器缺失、版本不匹配）。
+
+        Node 崩溃会打整块 banner（含盒符边框），直接截字符会把关键信息截掉，
+        故先按行筛错误行，每行只取首行并去掉边框噪声。
+        """
+        tail = self.log_tail()
+        if not tail:
+            return "codegen 无输出"
+        # Node 崩溃堆栈帧（at xxx / node:internal / triggerUncaughtException / JSON 日志字段）
+        # 对定位无价值，筛掉后只留真正的错误描述行
+        _noise = re.compile(
+            r"^(at\s|node:|triggerUncaughtException|\^$|[{}]|\s*log:|\s*name:|\s*message:)", re.I
+        )
+        err_lines = [
+            re.sub(r"[╔╗╚╝║═]", "", ln).strip()
+            for ln in tail.splitlines()
+            if re.search(r"(Error|error|Exception|doesn't exist|not found|No such|Failed|✘)", ln)
+        ]
+        err_lines = [ln for ln in err_lines if ln and not _noise.search(ln)]
+        picked = err_lines[-3:] if err_lines else [
+            ln.strip() for ln in tail.splitlines()[-3:]
+            if ln.strip() and not _noise.match(ln.strip())
+        ]
+        return " / ".join(picked)[:300] or "codegen 无有效输出"
+
+    def _drain_output(self, proc: subprocess.Popen) -> None:
+        """读干 codegen 输出：留尾部若干行供诊断，同时转写后端控制台。
+
+        必须持续读，否则管道写满（64KB）会把 codegen 阻塞住。
+        """
+        try:
+            assert proc.stdout is not None
+            for line in proc.stdout:
+                line = line.rstrip()
+                if not line:
+                    continue
+                self._proc_log.append(line)
+                if len(self._proc_log) > _LOG_TAIL_LINES * 4:
+                    del self._proc_log[:-_LOG_TAIL_LINES]
+                print(f"[codegen] {line}", file=sys.stderr, flush=True)
+        except Exception:  # noqa: BLE001  进程退出/管道关闭属正常
+            pass
 
     def _run(self) -> None:
         try:
@@ -94,28 +172,47 @@ class RecordSession:
                     f"找不到 playwright CLI，请确认已在虚拟环境中安装：{pw_bin}"
                 )
 
-            login_url = config.get("base_url").rstrip("/") + "/login"
+            # 录制起点：测试环境的站点 URL（页面不再维护登录路径，填的就是要打开的地址）
+            site_url = (config.get("base_url") or "").rstrip("/")
 
             cmd = [
                 str(pw_bin), "codegen",
                 "--target", "python",
                 "--output", str(self._script_file),
-                login_url,
+                site_url,
             ]
 
-            # 子进程继承环境变量，stdout/stderr 不捕获（codegen 自己管 UI）
-            self._proc = subprocess.Popen(cmd)
+            # 捕获 codegen 输出：崩溃原因（如浏览器未安装）只写在 stderr，
+            # 不接管道就只会混进后端日志流，前端拿不到，用户只看到「没开窗口就结束了」。
+            self._proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+            )
+            self._started_at = time.monotonic()
+            self._out_thread = threading.Thread(
+                target=self._drain_output, args=(self._proc,), daemon=True
+            )
+            self._out_thread.start()
             self.ready.set()
             self.emit("record_log", {
-                "msg": "录制就绪，请在弹出的 Playwright Inspector 浏览器里操作（从登录开始），"
-                       "完成后点『停止并生成』或直接关闭浏览器"
+                "msg": "录制就绪，已在弹出的 Playwright Inspector 浏览器里打开测试环境的站点 URL，"
+                       "请在其中操作被测系统，完成后点『停止并生成』或直接关闭浏览器"
             })
 
             # 主循环：等前端 stop 指令，或 codegen 进程自然退出（用户关闭浏览器）
             while not self.stopped.is_set():
-                if self._proc.poll() is not None:
-                    # codegen 进程已自然退出（用户关闭了 Inspector 浏览器窗口）
-                    self.emit("record_log", {"msg": "录制浏览器已关闭，正在生成用例…"})
+                rc = self._proc.poll()
+                if rc is not None:
+                    # codegen 进程已退出：区分「用户关窗」与「启动即崩溃」
+                    if rc != 0 and time.monotonic() - self._started_at < _STARTUP_GRACE:
+                        self.error = f"录制进程启动失败（exit={rc}）：{self.summarize_error()}"
+                        self.emit("error", {"msg": self.error})
+                    else:
+                        self.emit("record_log", {"msg": "录制浏览器已关闭，正在生成用例…"})
                     break
                 try:
                     cmd_msg = self.commands.get(timeout=0.3)
@@ -137,6 +234,8 @@ class RecordSession:
             self.error = f"{type(e).__name__}: {str(e)[:200]}"
             self.emit("error", {"msg": f"录制启动失败：{self.error}"})
         finally:
+            # 先快照再杀进程：terminate 后 codegen 可能来不及写完最后一笔
+            self._snapshot_script()
             # 杀掉残留进程
             if self._proc and self._proc.poll() is None:
                 self._proc.terminate()
@@ -157,7 +256,7 @@ _TRANSLATE_SYSTEM = """\
 请把每段操作整理成一条中文测试用例，调用 emit_cases 返回结构化结果。
 
 步骤翻译规则：
-1) 若脚本开头有 goto('/login') + fill('账号') + fill('密码') + click('登录')，整理为『登录系统』；
+1) 若脚本开头有 goto(站点 URL) + fill('账号') + fill('密码') + click('登录')，整理为『登录系统』；
 2) 连续的菜单点击（get_by_text / get_by_role 点菜单项）+ URL/标题变化，合并为『进入 X → Y』；
 3) fill() → 『在 X 输入 Y』；click() → 『点击 X』；select_option() → 『在 X 选择 Y』；
 4) expect_popup() / context.pages[] 表示新标签页，继续记录新标签页里的操作，不单独成步；
@@ -260,12 +359,16 @@ import json
 import os
 import time
 from pathlib import Path
+from urllib.parse import urlparse
 from playwright.sync_api import sync_playwright, expect
 
 def emit(kind, **kw):
     print(json.dumps({"kind": kind, **kw}, ensure_ascii=False), flush=True)
 
 BASE_URL = os.environ.get("PW_BASE_URL", "").rstrip("/")
+# 站点 URL 可能带路径（如 /login），同源其他页面用 BASE_ORIGIN 拼接
+_base_parts = urlparse(BASE_URL)
+BASE_ORIGIN = f"{_base_parts.scheme}://{_base_parts.netloc}" if _base_parts.netloc else ""
 USERNAME  = os.environ.get("PW_USERNAME", "")
 PASSWORD  = os.environ.get("PW_PASSWORD", "")
 # 登录就绪判据选择器 + localStorage token 键名（由父进程按 config 注入）
@@ -467,14 +570,21 @@ def adapt_codegen_script(raw_script: str, case_steps: list[str]) -> Optional[str
     def _replace_url(line: str) -> str:
         if not _base:
             return line
-        # page.goto("http://...") → page.goto(f"{BASE_URL}/path")
+        # 与站点 URL 同一地址→ BASE_URL；站点 URL 下的子页→ f"{BASE_URL}/path"；同源其他页→ f"{BASE_ORIGIN}/path"
+        _parsed = urlparse(_base)
+        _origin = f"{_parsed.scheme}://{_parsed.netloc}" if _parsed.netloc else ""
+
         def _sub(m):
             url = m.group(1)
+            if url.rstrip("/") == _base:
+                return "BASE_URL"
             if url.startswith(_base):
                 path = url[len(_base):]
                 if not path:
                     path = "/"
                 return f'f"{{BASE_URL}}{path}"'
+            if _origin and url.startswith(_origin):
+                return f'f"{{BASE_ORIGIN}}{url[len(_origin):]}"'
             return m.group(0)
         return re.sub(r'"(https?://[^"]+)"', _sub, line)
 

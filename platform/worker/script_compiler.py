@@ -180,7 +180,7 @@ _SYSTEM = """\
 - 函数内最后一行必须是 `    emit("done", status="passed", error="")`（4 空格缩进）
 
 ### 可用变量（已在模块顶层定义）
-- `BASE_URL`：被测站点根地址（已去除尾部 /）
+- `BASE_URL`：测试环境的站点 URL（打开即用，一般就是登录页；已去除尾部 /）
 - `USERNAME`、`PASSWORD`：登录账号
 - `LOGIN_READY_SEL`：登录就绪判据选择器（登录步骤断言必须用它，不要自造菜单文字）
 - `TOKEN_KEY`：localStorage 中 token 的键名
@@ -237,7 +237,7 @@ def run():
 
         emit("step", index=0, text="登录系统", state="running")
         time.sleep(1)
-        page.goto(f"{BASE_URL}/login", wait_until="domcontentloaded")
+        page.goto(BASE_URL, wait_until="domcontentloaded")
         page.wait_for_selector("input[placeholder*='用户名'], input[placeholder*='账号'], input[type='text']", timeout=15000)
         page.locator("input[placeholder*='用户名'], input[placeholder*='账号'], input[type='text']").first.fill(USERNAME)
         page.locator("input[placeholder*='密码'], input[type='password']").first.fill(PASSWORD)
@@ -463,7 +463,7 @@ def _trace_entry_to_code(entry: dict, idx: int) -> str:
 
     if action == "login":
         return (
-            "        page.goto(f\"{BASE_URL}/login\", wait_until=\"domcontentloaded\")\n"
+            "        page.goto(BASE_URL, wait_until=\"domcontentloaded\")\n"
             "        page.wait_for_selector(\"input[placeholder*='用户名'], input[placeholder*='账号'], input[type='text']\", timeout=15000)\n"
             "        page.locator(\"input[placeholder*='用户名'], input[placeholder*='账号'], input[type='text']\").first.fill(USERNAME)\n"
             "        page.locator(\"input[placeholder*='密码'], input[type='password']\").first.fill(PASSWORD)\n"

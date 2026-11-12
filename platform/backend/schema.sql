@@ -141,8 +141,7 @@ CREATE TABLE IF NOT EXISTS `api_scenario_run` (
 CREATE TABLE IF NOT EXISTS `test_env` (
   `id`         INT NOT NULL AUTO_INCREMENT,
   `name`       VARCHAR(100) NOT NULL COMMENT '环境名',
-  `base_url`   VARCHAR(300) DEFAULT '' COMMENT '测试站点 URL',
-  `login_path` VARCHAR(100) DEFAULT '/login' COMMENT '登录路径',
+  `base_url`   VARCHAR(300) DEFAULT '' COMMENT '测试站点 URL（打开即用，一般填登录页）',
   `username`   VARCHAR(100) DEFAULT '' COMMENT '测试账号',
   `password`   VARCHAR(200) DEFAULT '' COMMENT '测试密码',
   `is_default` TINYINT(1) DEFAULT 0 COMMENT '是否默认环境',

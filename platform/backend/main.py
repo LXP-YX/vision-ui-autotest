@@ -636,12 +636,11 @@ def classify_locators(body: dict = None):
     return {"updated": sum(1 for r in results if r["element_type"]), "results": results}
 
 
-# ------------------------- 测试数据管理（多套环境，全落库） -------------------------
+# ------------------------- 测试环境管理（多套环境，全落库） -------------------------
 
 class TestEnvIn(BaseModel):
     name: str
-    base_url: str = ""
-    login_path: str = "/login"
+    base_url: str = ""  # 打开即用的站点地址（一般填登录页 URL）
     username: str = ""
     password: str = ""
 
@@ -832,6 +831,15 @@ def record_stop(sid: int):
     except LLMError as e:
         record_manager.drop_session(sid)
         raise HTTPException(502, f"翻译失败：{e}")
+
+    # 停止后 codegen 才完整落盘，优先用停止后读到的脚本
+    script = s.script or raw_script
+    if not (script or "").strip():
+        # 空脚本 = 没开浏览器 / 启动即崩溃 / 没录到操作，不能假装生成成功
+        record_manager.drop_session(sid)
+        reason = s.rec.error or "未录到任何操作（浏览器窗口可能没打开，看后端日志 [codegen] 报错）"
+        raise HTTPException(400, f"录制内容为空：{reason}")
+    raw_script = script
 
     # 改造脚本（纯代码变换 + LLM 仅标注步骤边界，不重写任何操作行）
     adapted_script: Optional[str] = None

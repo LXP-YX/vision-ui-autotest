@@ -1,7 +1,7 @@
 <template>
   <div>
     <div class="bar">
-      <span class="sec-title">测试数据管理</span>
+      <span class="sec-title">测试环境管理</span>
       <span>
         <el-button type="primary" size="small" @click="openEdit()">新建环境</el-button>
         <el-button type="danger" size="small" :disabled="!selection.length"
@@ -9,7 +9,7 @@
       </span>
     </div>
     <el-alert type="info" :closable="false" show-icon class="mb"
-      title="维护多套测试环境（站点 URL / 登录路径 / 账号 / 密码），全部落库。下拉/按钮选中的默认环境供登录、录制、执行使用。" />
+      title="维护多套测试环境（站点 URL / 账号 / 密码），全部落库。站点 URL 填打开即用的地址（一般填登录页 URL），登录、录制、执行都直接打开它。下拉/按钮选中的默认环境供登录、录制、执行使用。" />
 
     <div class="picker mb">
       <span>当前默认环境：</span>
@@ -48,8 +48,7 @@
     <el-dialog v-model="editVisible" :title="form.id ? `编辑环境 #${form.id}` : '新建环境'" width="520px">
       <el-form :model="form" label-width="90px">
         <el-form-item label="环境名"><el-input v-model="form.name" placeholder="如 测试环境 / 预发环境" /></el-form-item>
-        <el-form-item label="站点 URL"><el-input v-model="form.base_url" placeholder="https://your-site.example.com" /></el-form-item>
-        <el-form-item label="登录路径"><el-input v-model="form.login_path" placeholder="/login" /></el-form-item>
+        <el-form-item label="站点 URL"><el-input v-model="form.base_url" placeholder="https://your-site.example.com/login" /></el-form-item>
         <el-form-item label="账号"><el-input v-model="form.username" placeholder="登录用户名" /></el-form-item>
         <el-form-item label="密码">
           <el-input v-model="form.password" type="password" show-password
@@ -76,7 +75,7 @@ const { items: envs, setItems: setEnvs, onSortChange, indexOf } = useIdSort()
 const { selection, onSelectionChange, batchDelete } = useMultiSelect()
 const defaultId = ref(null)
 const editVisible = ref(false)
-const form = reactive({ id: null, name: '', base_url: '', login_path: '/login', username: '', password: '' })
+const form = reactive({ id: null, name: '', base_url: '', username: '', password: '' })
 
 async function load() {
   const { data } = await axios.get('/api/test-envs')
@@ -88,16 +87,16 @@ async function load() {
 function openEdit(row) {
   if (row) {
     Object.assign(form, { id: row.id, name: row.name, base_url: row.base_url,
-      login_path: row.login_path, username: row.username, password: '' })
+      username: row.username, password: '' })
   } else {
-    Object.assign(form, { id: null, name: '', base_url: '', login_path: '/login', username: '', password: '' })
+    Object.assign(form, { id: null, name: '', base_url: '', username: '', password: '' })
   }
   editVisible.value = true
 }
 
 async function save() {
   if (!form.name || !form.base_url) { ElMessage.warning('请填写环境名和站点 URL'); return }
-  const payload = { name: form.name, base_url: form.base_url, login_path: form.login_path,
+  const payload = { name: form.name, base_url: form.base_url,
     username: form.username, password: form.password }
   if (form.id) await axios.put(`/api/test-envs/${form.id}`, payload)
   else await axios.post('/api/test-envs', payload)

@@ -32,10 +32,8 @@ class LoginPage(BasePage):
     )
 
     def open(self) -> None:
-        """打开登录页并等待用户名输入框出现。"""
-        base_url = config.get("base_url").rstrip("/")
-        login_path = config.get("login_path", default="/login")
-        self.page.goto(f"{base_url}{login_path}", wait_until="domcontentloaded")
+        """打开登录页（站点 URL 即打开地址）并等待用户名输入框出现。"""
+        self.page.goto(config.get("base_url").rstrip("/"), wait_until="domcontentloaded")
         self.wait_visible(", ".join(self.USERNAME_SELECTORS), timeout=15_000)
 
     def login(self, username: str, password: str) -> None:

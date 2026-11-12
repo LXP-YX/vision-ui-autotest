@@ -18,7 +18,7 @@
     </div>
 
     <el-alert type="info" :closable="false" show-icon class="mb"
-      title="点『开始录制』后，平台会在你的电脑上弹出 Playwright Inspector 浏览器窗口。请在弹出窗口中从登录页开始操作被测系统，所有操作（含新增、删除、提交等）均会被录制。想把操作拆成多条用例时，在一条流程结束后点『切分用例』（点几次就多切几条）。完成后回到本页点『停止并生成』或直接关闭浏览器，平台会用 AI 把录制内容翻译成中文用例草稿。" />
+      title="点『开始录制』后，平台会在你的电脑上弹出 Playwright Inspector 浏览器窗口，直接打开「测试环境管理」里默认环境的站点 URL。请在弹出窗口中操作被测系统，所有操作（含新增、删除、提交等）均会被录制。想把操作拆成多条用例时，在一条流程结束后点『切分用例』（点几次就多切几条）。完成后回到本页点『停止并生成』或直接关闭浏览器，平台会用 AI 把录制内容翻译成中文用例草稿。" />
 
     <div class="sec-title mb">录制日志</div>
     <div class="acts">
@@ -101,7 +101,12 @@ function openWs(id) {
     } else if (kind === 'record_log') {
       logs.value.push(payload.msg)
     } else if (kind === 'error') {
-      ElMessage.error(payload.msg); starting.value = false
+      // 启动失败（如浏览器未安装）：写进日志并退回未录制态，否则只有一条误导的提示
+      logs.value.push(payload.msg)
+      ElMessage.error(payload.msg)
+      starting.value = false
+      recording.value = false
+      sock.close()
     }
   }
   sock.onerror = () => { ElMessage.error('录制连接错误'); starting.value = false }

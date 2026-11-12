@@ -26,7 +26,7 @@
         </el-menu-item>
         <el-menu-item index="/test-data">
           <el-icon><Setting /></el-icon>
-          <span>测试数据管理</span>
+          <span>测试环境管理</span>
         </el-menu-item>
         <el-menu-item index="/llm">
           <el-icon><Cpu /></el-icon>

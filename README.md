@@ -9,7 +9,7 @@
 - **自然语言用例**：中文步骤描述（如 `登录系统`、`进入 系统设置 → 用户管理`、`确认页面正常无报错`），AI Planner 解析为可执行动作；LLM 不可用自动回退规则式解析
 - **视觉理解（VLM）**：截图交给多模态大模型做视觉定位与视觉断言；任意 OpenAI 兼容 VLM 端点均可接入
 - **脚本自愈**：三级定位（知识库命中 → 语义定位 → VLM 视觉重定位），成功自动回写知识库；三级全失败判为功能缺陷，不伪造通过
-- **可视化平台**：用例管理、执行记录、测试数据（多环境）、大模型配置、自愈知识库、测试计划
+- **可视化平台**：用例管理、执行记录、测试环境（多套可切换）、大模型配置、自愈知识库、测试计划
 - **实时投屏**：无头 Chromium + CDP `Page.startScreencast`，云端无物理屏也能实时观看执行过程
 - **AI 生成用例**：需求描述 / 页面探索 / 操作录制三种方式生成用例草稿（人工审核后生效）
 - **App 自动化（纯 ADB）**：可选的 Android 测试路线，与 Web 端共用平台与大模型配置
@@ -73,7 +73,7 @@ PW_HEADLESS=0 python3 run_login.py    # 临时有头调试
 python3 -m pytest                     # pytest 登录冒烟
 ```
 
-引擎单机模式无需启动平台：`config.yaml` 的 `site` / `account` 段提供站点与账号（平台 DB 可用时优先用平台「测试数据管理」维护的环境）。
+引擎单机模式无需启动平台：`config.yaml` 的 `site` / `account` 段提供站点与账号（平台 DB 可用时优先用平台「测试环境管理」维护的环境）。
 
 ### B. 启动可视化测试平台
 
@@ -98,8 +98,7 @@ login_ready_menus: ["首页", "系统设置"]   # 登录成功判据（按被测
 api:
   token_storage_key: "token"      # 被测站点登录后 token 在 localStorage 的键名
 site:                             # 单机模式回退用；平台模式下由 DB 提供
-  base_url: "https://your-site.example.com"
-  login_path: "/login"
+  base_url: "https://your-site.example.com/login"   # 打开即用的地址（一般填登录页）
 account:
   username: "${SITE_USERNAME}"   # 敏感值走环境变量注入
   password: "${SITE_PASSWORD}"

@@ -17,10 +17,12 @@ This file provides guidance to AI coding agents (Claude Code / others) when work
 
 ## 项目概述
 
-**vision-ui-autotest**：自然语言驱动、视觉理解、脚本自愈的 UI 自动化测试引擎 + 可视化测试平台。纯测试客户端，仓库里没有被测应用源码；被测站点由平台「测试数据管理」页面维护的环境（DB，优先），DB 不可用时回退 `config.yaml`（单机模式）。
+**vision-ui-autotest**：自然语言驱动、视觉理解、脚本自愈的 UI 自动化测试引擎 + 可视化测试平台。纯测试客户端，仓库里没有被测应用源码；被测站点由平台「测试环境管理」页面维护的环境（DB，优先），DB 不可用时回退 `config.yaml`（单机模式）。
 
 **配置加载优先级**：
 1. 测试数据（base_url、account）：平台 DB 的默认测试环境 > `config.yaml` 的 `site`/`account` 段
+   - `base_url` 是「打开即用」的完整站点地址（一般填登录页）；登录/录制/执行均直接打开它，
+     独立的登录路径（`login_path` / `test_env.login_path`）已废弃，不再被代码读取
 2. 大模型配置：平台 DB 的默认 LLMConfig > 环境变量
 3. 浏览器与基础配置：`config.yaml`
 
@@ -40,6 +42,8 @@ This file provides guidance to AI coding agents (Claude Code / others) when work
 
 **配置加载优先级**：
 - 测试数据（base_url、account）：平台 DB 的默认测试环境 > `config.yaml` 的 `site`/`account` 段
+  （`base_url` 即打开地址，登录路径已废弃；旧 config.yaml 里的 `site.login_path` 仅作为兼容，
+  由 `config.site_open_url()` 一次性拼到 base_url 尾部）
 - 大模型配置：平台 DB 的默认 LLMConfig > 环境变量
 - 浏览器与基础配置：`config.yaml`
 
@@ -47,6 +51,7 @@ This file provides guidance to AI coding agents (Claude Code / others) when work
 
 - 连接读自 `config.yaml` 的 `database` 段：`enabled: true` 用 **MySQL**（默认库名 `vision_ui_autotest`），否则/连接失败**回退本地 SQLite**（`platform/platform.db`）。
 - 核心表：`test_case` / `test_run` / `llm_config` / `locator` / `test_env` 等（见 `platform/backend/schema.sql`；应用启动时 `create_all` 自动建）。
+- `test_env.login_path` 已废弃：列保留不用（旧库该列 NOT NULL，删映射会让新建环境写库失败），页面/接口/模型输出均不再暴露。
 - 约定：**现有字段只增不改**，不含账户敏感数据。DB 变更需人工执行 SQL 脚本（`platform/backend/migrations/`）。
 
 ## 大模型接入 & VLM

@@ -986,9 +986,8 @@ def _run_nl_and_compile_async(
                 main.page = page
             pending_pages.clear()
             try:
-                base_url = config.get("base_url").rstrip("/")
-                login_path = config.get("login_path", default="/login")
-                page.goto(f"{base_url}{login_path}", wait_until="domcontentloaded")
+                # 站点 URL 即登录页地址（不再拼登录路径），复位到它等于回登录页
+                page.goto(config.get("base_url").rstrip("/"), wait_until="domcontentloaded")
             except Exception:
                 pass
             _push_frame(page, emit)

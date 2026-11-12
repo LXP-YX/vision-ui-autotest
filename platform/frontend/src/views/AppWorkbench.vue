@@ -19,7 +19,7 @@
 
     <el-row :gutter="12" class="body">
       <!-- 左：App 用例列表 -->
-      <el-col :span="12">
+      <el-col :span="15">
         <el-card shadow="never" class="card">
           <template #header>
             <span class="sec-title">App 用例</span>
@@ -40,9 +40,9 @@
         </el-card>
       </el-col>
 
-      <!-- 右：App 管理 + 投屏/日志并列 -->
-      <el-col :span="12">
-        <!-- App 管理 -->
+      <!-- 右：App 管理 + 手机投屏 + 执行日志（上下排列） -->
+      <el-col :span="9">
+        <!-- App 管理（宽度随右列收窄） -->
         <el-card shadow="never" class="card">
           <template #header><span class="sec-title">App 管理</span></template>
           <div class="app-row">
@@ -66,50 +66,45 @@
           </el-table>
         </el-card>
 
-        <!-- 模拟器实时画面 与 执行日志 并列 -->
-        <el-row :gutter="12">
-          <el-col :span="13">
-            <el-card shadow="never" class="card">
-              <template #header>
-                <span class="sec-title">手机投屏</span>
-              </template>
-              <div class="screen-wrap" :class="{ offline: !online }">
-                <canvas ref="canvas" class="screen"
-                        @mousedown="onMouseDown" @mouseup="onMouseUp" @click="focusKbd"
-                        @mousemove="onMouseMove" @mouseleave="onMouseUp" />
-                <!-- 隐藏 input：捕获键盘输入（可打印字符走 adb input text，特殊键走 keyevent） -->
-                <input ref="kbd" class="kbd-capture" type="text" autocomplete="off"
-                       @keydown="onKeydown" @input="onKbdInput"
-                       @focus="kbdFocus = true" @blur="kbdFocus = false" />
-                <div v-if="!online" class="screen-mask">设备不在线</div>
-              </div>
-              <!-- 按键栏：BACK / HOME / 最近任务 / 回车 / 截图，纯图标 -->
-              <div class="keys">
-                <el-button size="small" :icon="Back" @click="key(4)" :disabled="!online" title="返回" />
-                <el-button size="small" :icon="HomeFilled" @click="key(3)" :disabled="!online" title="主屏" />
-                <el-button size="small" :icon="Menu" @click="key(187)" :disabled="!online" title="最近任务" />
-                <el-button size="small" :icon="Position" @click="key(66)" :disabled="!online" title="回车" />
-                <el-button size="small" :icon="Camera" @click="snapshot" :disabled="!online" title="截图" />
-              </div>
-            </el-card>
-          </el-col>
+        <!-- 手机投屏 -->
+        <el-card shadow="never" class="card">
+          <template #header>
+            <span class="sec-title">手机投屏</span>
+          </template>
+          <div class="screen-wrap" :class="{ offline: !online }">
+            <canvas ref="canvas" class="screen"
+                    @mousedown="onMouseDown" @mouseup="onMouseUp" @click="focusKbd"
+                    @mousemove="onMouseMove" @mouseleave="onMouseUp" />
+            <!-- 隐藏 input：捕获键盘输入（可打印字符走 adb input text，特殊键走 keyevent） -->
+            <input ref="kbd" class="kbd-capture" type="text" autocomplete="off"
+                   @keydown="onKeydown" @input="onKbdInput"
+                   @focus="kbdFocus = true" @blur="kbdFocus = false" />
+            <div v-if="!online" class="screen-mask">设备不在线</div>
+          </div>
+          <!-- 按键栏：BACK / HOME / 最近任务 / 回车 / 截图，纯图标 -->
+          <div class="keys">
+            <el-button size="small" :icon="Back" @click="key(4)" :disabled="!online" title="返回" />
+            <el-button size="small" :icon="HomeFilled" @click="key(3)" :disabled="!online" title="主屏" />
+            <el-button size="small" :icon="Menu" @click="key(187)" :disabled="!online" title="最近任务" />
+            <el-button size="small" :icon="Position" @click="key(66)" :disabled="!online" title="回车" />
+            <el-button size="small" :icon="Camera" @click="snapshot" :disabled="!online" title="截图" />
+          </div>
+        </el-card>
 
-          <el-col :span="11">
-            <el-card shadow="never" class="card log-card">
-              <template #header>
-                <span class="sec-title">执行日志</span>
-                <span v-if="running" class="dim">运行中…</span>
-                <el-button v-if="running" size="small" type="danger" plain style="float:right" @click="stopRun">停止</el-button>
-              </template>
-              <div class="logs">
-                <div v-for="(l, i) in logs" :key="i" class="log" :class="l.level">
-                  <span class="t">{{ l.t }}</span>{{ l.text }}
-                </div>
-                <div v-if="!logs.length" class="hint">点击「运行」执行 App 用例，步骤进度与自愈事件实时展示于此</div>
-              </div>
-            </el-card>
-          </el-col>
-        </el-row>
+        <!-- 执行日志（投屏下方，同宽） -->
+        <el-card shadow="never" class="card log-card">
+          <template #header>
+            <span class="sec-title">执行日志</span>
+            <span v-if="running" class="dim">运行中…</span>
+            <el-button v-if="running" size="small" type="danger" plain style="float:right" @click="stopRun">停止</el-button>
+          </template>
+          <div class="logs">
+            <div v-for="(l, i) in logs" :key="i" class="log" :class="l.level">
+              <span class="t">{{ l.t }}</span>{{ l.text }}
+            </div>
+            <div v-if="!logs.length" class="hint">点击「运行」执行 App 用例，步骤进度与自愈事件实时展示于此</div>
+          </div>
+        </el-card>
       </el-col>
     </el-row>
 
@@ -580,11 +575,12 @@ onBeforeUnmount(() => {
 .card { margin-bottom: 12px; }
 .app-row { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
 
-.screen-wrap { position: relative; background: #1f2d3d; border-radius: 4px; min-height: 420px;
-               display: flex; justify-content: center; align-items: center; }
+.screen-wrap { position: relative; background: #1f2d3d; border-radius: 4px;
+               display: flex; justify-content: center; align-items: center;
+               aspect-ratio: 9 / 16; }
 .screen-wrap.offline { opacity: 0.5; }
 /* 只显示单个手机竖屏视图：限制最大宽度，不被拉成横向大块 */
-.screen { max-width: 100%; max-height: 62vh; width: auto; height: auto; display: block;
+.screen { max-width: 100%; max-height: 100%; width: auto; height: auto; display: block;
           cursor: crosshair; touch-action: none; }
 .screen-mask { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
                color: #fff; font-size: 14px; }
@@ -594,8 +590,8 @@ onBeforeUnmount(() => {
                background: transparent; color: transparent; caret-color: transparent; }
 .keys { display: flex; gap: 6px; margin-top: 10px; flex-wrap: wrap; }
 
-.log-card :deep(.el-card__body) { display: flex; flex-direction: column; }
-.logs { background: #1f2d3d; border-radius: 4px; padding: 10px; min-height: 480px; max-height: 62vh; overflow: auto; }
+.log-card :deep(.el-card__body) { display: flex; flex-direction: column; height: 260px; }
+.logs { background: #1f2d3d; border-radius: 4px; padding: 10px; flex: 1; overflow: auto; }
 .log { font-size: 12px; line-height: 1.8; color: #d0d6e0; font-family: ui-monospace, Menlo, monospace; }
 .log .t { color: #5a6473; margin-right: 6px; }
 .log.ok { color: #67c23a; }

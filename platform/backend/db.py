@@ -228,7 +228,9 @@ class Locator(Base):
 class TestEnv(Base):
     """测试环境（页面维护，多套可切换，全落库）。
 
-    每套是一组完整测试数据：名称 + 站点 URL + 登录路径 + 账号 + 密码。
+    每套是一组完整测试数据：名称 + 站点 URL + 账号 + 密码。
+    站点 URL 就是「打开即用」的地址（一般填登录页 URL），不再单独维护登录路径；
+    login_path 列仅保留不用（见下方字段注释），接口与页面均不再暴露。
     默认环境（is_default）供登录/录制/执行使用（见 core/config.py），
     完全以库为准、不读 config.yaml（仅首次空库时从 config.yaml 播种一条）。
     """
@@ -238,7 +240,9 @@ class TestEnv(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     name: Mapped[str] = mapped_column(String(100), nullable=False)
     base_url: Mapped[str] = mapped_column(String(300), default="")
-    login_path: Mapped[str] = mapped_column(String(100), default="/login")
+    # 已废弃（登录路径并入站点 URL）：旧库该列为 NOT NULL 且无默认值，去掉映射会让
+    # 新建环境写库失败，故保留列、统一写空串；按「现有字段只增不改」约定也不做删列迁移。
+    login_path: Mapped[str] = mapped_column(String(100), default="")
     username: Mapped[str] = mapped_column(String(100), default="")
     password: Mapped[str] = mapped_column(String(200), default="")
     is_default: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -253,7 +257,7 @@ class TestEnv(Base):
             pwd = "****"
         return {
             "id": self.id, "name": self.name, "base_url": self.base_url,
-            "login_path": self.login_path, "username": self.username,
+            "username": self.username,
             "password": pwd, "is_default": self.is_default,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
         }
@@ -586,8 +590,7 @@ def _seed_test_env() -> None:
         acc = cfg.get("account", {}) or {}
         s.add(TestEnv(
             name="默认环境",
-            base_url=site.get("base_url", ""),
-            login_path=site.get("login_path", "/login"),
+            base_url=config.site_open_url(site),
             username=acc.get("username", ""),
             password=acc.get("password", ""),
             is_default=True,

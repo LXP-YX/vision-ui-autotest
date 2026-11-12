@@ -15,7 +15,7 @@ const routes = [
   { path: '/app-workbench', name: 'app-workbench', component: AppWorkbenchView, meta: { title: 'APP 工作台' } },
   { path: '/record', name: 'record', component: RecordView, meta: { title: '录制用例' } },
   { path: '/api-testing', name: 'api-testing', component: ApiTestingView, meta: { title: '接口管理' } },
-  { path: '/test-data', name: 'test-data', component: TestDataView, meta: { title: '测试数据管理' } },
+  { path: '/test-data', name: 'test-data', component: TestDataView, meta: { title: '测试环境管理' } },
   { path: '/llm', name: 'llm', component: LLMConfigView, meta: { title: '大模型配置' } },
   { path: '/locators', name: 'locators', component: LocatorView, meta: { title: '自愈知识库' } },
 ]
