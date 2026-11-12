@@ -81,12 +81,12 @@
                    @focus="kbdFocus = true" @blur="kbdFocus = false" />
             <div v-if="!online" class="screen-mask">设备不在线</div>
           </div>
-          <!-- 按键栏：BACK / HOME / 最近任务 / 回车 / 截图，纯图标 -->
+          <!-- 按键栏：BACK / HOME / 最近任务 / 回车 / 截图（图标库无三横线/回车符语义图标，这两键用文字字形） -->
           <div class="keys">
             <el-button size="small" :icon="Back" @click="key(4)" :disabled="!online" title="返回" />
             <el-button size="small" :icon="HomeFilled" @click="key(3)" :disabled="!online" title="主屏" />
-            <el-button size="small" :icon="Menu" @click="key(187)" :disabled="!online" title="最近任务" />
-            <el-button size="small" :icon="Position" @click="key(66)" :disabled="!online" title="回车" />
+            <el-button size="small" :disabled="!online" title="最近任务" @click="key(187)"><span class="key-glyph">≡</span></el-button>
+            <el-button size="small" :disabled="!online" title="回车" @click="key(66)"><span class="key-glyph">⏎</span></el-button>
             <el-button size="small" :icon="Camera" @click="snapshot" :disabled="!online" title="截图" />
           </div>
         </el-card>
@@ -129,7 +129,6 @@
       <el-form label-width="90px">
         <el-form-item label="用例名称"><el-input v-model="editorForm.name" /></el-form-item>
         <el-form-item label="App 包名"><el-input v-model="editorForm.app_package" placeholder="com.example.myapp" /></el-form-item>
-        <el-form-item label="启动 Activity"><el-input v-model="editorForm.app_activity" placeholder=".ui.LoginActivity" /></el-form-item>
         <el-form-item label="目标设备">
           <el-input v-model="editorForm.device_serial" placeholder="emulator-5554（留空时取工作台当前设备）" />
         </el-form-item>
@@ -426,19 +425,19 @@ async function loadCases() {
 
 // 用例编辑器
 const editorDlg = ref(false)
-const editorForm = ref({ id: null, name: '', app_package: '', app_activity: '', device_serial: '' })
+const editorForm = ref({ id: null, name: '', app_package: '', device_serial: '' })
 const stepText = ref('')
 
 function openEditor(row) {
   if (row) {
     editorForm.value = {
       id: row.id, name: row.name,
-      app_package: row.app_package || '', app_activity: row.app_activity || '',
+      app_package: row.app_package || '',
       device_serial: row.device_serial || '',
     }
     stepText.value = (row.steps || []).map(s => typeof s === 'string' ? s : (s.text || '')).join('\n')
   } else {
-    editorForm.value = { id: null, name: '', app_package: '', app_activity: '', device_serial: serial.value }
+    editorForm.value = { id: null, name: '', app_package: '', device_serial: serial.value }
     stepText.value = ''
   }
   editorDlg.value = true
@@ -453,7 +452,6 @@ async function saveCase() {
     steps,
     driver_type: 'app',
     app_package: editorForm.value.app_package,
-    app_activity: editorForm.value.app_activity,
     device_serial: editorForm.value.device_serial || serial.value,
   }
   try {
@@ -589,6 +587,8 @@ onBeforeUnmount(() => {
                opacity: 0; pointer-events: none; border: none; outline: none;
                background: transparent; color: transparent; caret-color: transparent; }
 .keys { display: flex; gap: 6px; margin-top: 10px; flex-wrap: wrap; }
+/* 最近任务 ≡ / 回车 ⏎ 用文字字形（图标库无对应语义图标），字号与 small 图标视觉协调 */
+.key-glyph { font-size: 14px; font-weight: 600; line-height: 1; }
 
 .log-card :deep(.el-card__body) { display: flex; flex-direction: column; height: 260px; }
 .logs { background: #1f2d3d; border-radius: 4px; padding: 10px; flex: 1; overflow: auto; }
