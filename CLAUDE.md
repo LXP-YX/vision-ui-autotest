@@ -31,10 +31,10 @@ This file provides guidance to AI coding agents (Claude Code / others) when work
 | 目录 | 角色 |
 |------|------|
 | `core/` | **Web 执行内核**（Playwright 封装）：浏览器生命周期、页面对象、状态等待、UI 健康检查、大模型客户端、VLM 视觉能力、脚本自愈。被 pytest 与平台 Worker 共同复用。 |
-| `core_app/` | **App 执行内核**（独立，双平台）：`drivers/`（`base.py` 驱动抽象 + `android/` 纯 ADB + `ios/` Appium XCUITest）、`vision.py`、`self_healing.py`、`planner.py`、`app_runner.py`。Android 不引入 Appium/Node；iOS 需 Appium Server + WDA；大模型复用 `core/llm_client.get_client()`。 |
+| `core_app/` | **App 执行内核**（独立，双平台统一）：`drivers/`（`base.py` 驱动抽象 + `appium_driver.py` 统一 Appium 实现：Android=UiAutomator2 / iOS=XCUITest）、`vision.py`、`self_healing.py`、`planner.py`、`app_runner.py`。**双平台同一执行框架，同一用例/脚本跨 Android/iOS 复用**；需 Appium Server（Android 装 `appium-uiautomator2-driver`，iOS 装 WebDriverAgent）；大模型复用 `core/llm_client.get_client()`。`drivers/android/adb.py` 等纯 ADB 工具保留给工作台投屏/包管理，不再用于执行。 |
 | `conftest.py` / `pytest.ini` | pytest 基础设施：会话级登录复用（context 预登录、cookies 跨用例共享）+ 失败自动截图。`tests/` 用例目录已移除，用例主要在平台维护。 |
 | `platform/` | **可视化测试平台**：`backend/`（FastAPI + DB）、`backend/app/`（App REST 路由 + 投屏 WS）、`frontend/`（Vue3 + Vite4 + Element Plus + vue-router）、`worker/`（执行 + CDP 投屏 + AI Planner + 页面探索/录制/脚本编译）。 |
-| `start.py` | 一键启动器（开发/生产模式）。 |
+| `main.py` | 一键启动器（开发/生产模式）。 |
 | `config.yaml` | **唯一配置源**（已 gitignore，模板见 `config.example.yaml`）：浏览器、登录判据、`site`/`account`（单机回退）、`database` 段。 |
 | `run_login.py` | 无头登录冒烟演示脚本。 |
 
@@ -65,15 +65,17 @@ This file provides guidance to AI coding agents (Claude Code / others) when work
 - **脚本编译**（`worker/script_compiler.py`）：把中文步骤编译为完整 Playwright Python 脚本；生成脚本中的登录判据选择器与 token 键名通过环境变量 `PW_LOGIN_READY_SEL` / `PW_TOKEN_KEY` 由 runner 注入（生成脚本内用 `LOGIN_READY_SEL` / `TOKEN_KEY` 变量，勿硬编码菜单文字）。
 - **VLM 视觉能力**（`core/vision.py`）：`locate()` 截图→坐标→`elementFromPoint` 反查→稳定选择器；`assert_visual()` 视觉断言。截图缩放 + JPEG 压缩降 token。
 - **脚本自愈**（`core/self_healing.py`）：`find_element()` 三级定位（Store 命中 → 语义 `:text-is(...):visible` → VLM），成功回写 `locator` 表；全失败返回 None——**自愈 ≠ 掩盖 Bug**。
-- **加密**（`core/crypto.py`）：API Key 经 Fernet 加密落库；**主密钥来自环境变量 `AUTOTEST_SECRET_KEY`**，代码内无固定密钥；密文带 `enc:v1:` 前缀；decrypt 不兼容无前缀明文。
+- **加密**（`core/crypto.py`）：API Key 经 Fernet 可逆加密落库，**主密钥来自环境变量 `AUTOTEST_SECRET_KEY`**（代码内无固定密钥、不入库，仅拿到 DB 无法解密）；密文带 `enc:v1:` 前缀，decrypt 不兼容无前缀明文。`main.py` 启动时按 `环境变量 > secrets/master.key` 顺序加载主密钥，两者都没有则打印指引并中止（不自动生成，避免换机后旧密文解不开）；`secrets/`、`*.key`、`.env` 均已 gitignore。`LLMConfig.to_dict(mask=True)` 返回掩码；`GET /api/llm-configs/{id}/reveal` 按需返回单条明文供页面小眼睛查看。主密钥缺失/不匹配时只读接口降级为 `has_api_key=false` 而不是 500。
 
-## APP 自动化（独立引擎：Android=纯 ADB / iOS=Appium）
+## APP 自动化（独立引擎：双平台统一 Appium）
 
 与 WEB 自动化（`core/`）完全解耦：引擎层互不依赖，仅在平台层经 `platform/backend/runner_dispatch.py` 按 `driver_type` 分流（分叉点已上提到 manager 层，APP 链路不加载 Playwright）。核心思想一致：自然语言驱动、视觉理解、脚本自愈。
-- **驱动抽象**（`core_app/drivers/`）：`base.DeviceDriver` 统一契约 + `UiNode` 统一节点模型（text/desc/resource_id/bounds）；`android/`（纯 stdlib ADB）、`ios/`（Appium XCUITest，像素↔逻辑点换算、元素级 Unicode 输入）。`create_driver(platform, device_id, ...)` 工厂选择实现。
-- **APP 测试环境**（`app_env` 表，「APP 测试环境」页面维护）：platform(android|ios) + 设备 serial/udid + 被测 App package/bundle_id + 可选账号；用例绑 `test_case.app_env_id`，`device_serial` 保留为临时手动覆盖；未绑环境的存量用例按 Android 旧字段兼容执行。
+- **驱动抽象**（`core_app/drivers/`）：`base.DeviceDriver` 统一契约 + `UiNode` 统一节点模型（text/desc/resource_id/bounds）；**`appium_driver.AppiumDriver` 双平台统一实现**（Android=UiAutomator2 / iOS=XCUITest），平台差异（坐标 pt↔px 换算、按键 keycode/pressButton、back 键 iOS 走边缘手势、元素级 Unicode 输入）全部收敛在驱动内。`create_driver(platform, device_id, ...)` 两平台均返回 `AppiumDriver`；`android/adb.py` 等纯 ADB 工具保留给工作台投屏/包管理，不用于执行。
+- **平台无关用例**：同一份用例/脚本可在 Android/iOS 直接复用——执行时用 `POST /api/cases/{id}/run` 的 body `{"app_env_id":N}` 指定目标环境（App 工作台「运行环境」下拉），缺省用用例绑定的 `test_case.app_env_id`；`app_runner.run_app_case(..., run_env_id=)` 为首要优先级。
+- **APP 测试环境**（`app_env` 表，「APP 测试环境」页面维护）：platform(android|ios) + 设备 serial/udid + 被测 App package/bundle_id + 可选账号；`device_serial` 保留为临时手动覆盖；未绑环境的存量用例按 Android 旧字段兼容执行。
 - **三层定位自愈**（`core_app/self_healing.py`）：`app_locator` 表（与 WEB 的 `locator` 表**表级拆分**，selector 存 `{"by","value"}` JSON）→ UiNode 语义匹配 → VLM 截图定位；知识库行带 `platform` + `env_id` 维度，同名锚点在 WEB/Android/iOS/不同环境间互不串扰。WEB 侧 `core/self_healing.py` 同样支持 `env_id`（`locator.env_id`，NULL=全局）。
-- **运行要求**：Android 需 `adb` 在 PATH 且已连接设备；iOS 需 mac + Xcode（WDA 部署）、`pip install Appium-Python-Client`、Node 侧 `appium` server 常驻（地址读 `config.yaml` 的 `appium.server_url`，默认 127.0.0.1:4723）。
+- **APP 脚本编译**（`script_compiler.compile_to_app_script`）：APP 用例可编译为独立 Python 脚本（内嵌步骤 + 调用 `run_app_case(env_override=ENV)`），**同一份脚本双平台通用**，运行期由环境变量选择平台：`APP_PLATFORM`(android|ios) / `APP_DEVICE_ID` / `APP_APP_ID` / `APP_ACTIVITY` / `VUA_REPO_ROOT`。
+- **运行要求**：双平台均需 Appium Server 常驻（地址读 `config.yaml` 的 `appium.server_url`，默认 127.0.0.1:4723）+ `pip install Appium-Python-Client`；Android 需 Node 侧 `appium-uiautomator2-driver` 且设备已连接（adb）；iOS 需 mac + Xcode（WDA 部署）。
 - **投屏**：`/ws/app/screen/{device_id}?platform=` 双平台采集（android=adb screencap，iOS=xcrun 截图预览；触控/输入仅 Android 工作台支持，iOS 交互经用例执行由 Appium 驱动）。
 
 ## 常用命令
@@ -88,8 +90,8 @@ python3 -m pytest                                # 跑全部用例（tests/ 为�
 python3 -m pytest "tests/test_xxx.py::TestClass::test_name" -v   # 单用例（有用例时）
 
 # --- 测试平台 ---
-python3 start.py                                 # 开发模式：后端8077 + 前端5177(热更新)
-sudo python3 start.py --prod                     # 生产模式：单进程单端口(80)
+python3 main.py                                 # 开发模式：后端8077 + 前端5177(热更新)
+sudo python3 main.py --prod                     # 生产模式：单进程单端口(80)
 cd platform/frontend && npm install              # 首次装前端依赖
 python3 -m playwright install chromium           # 首次装浏览器
 cd platform/frontend && npm run build            # 前端单独构建（提交前自查项）
@@ -105,10 +107,11 @@ cd platform/frontend && npm run dev              # 启动 Vite 开发服务器�
 
 - **五层**：Vue 前端 → FastAPI（REST + WebSocket）→ Worker（调 `core/` 引擎跑用例）→ Chromium → 被测站点。
 - **同步 Playwright 跑后台线程**：同步 API 不能进 asyncio 事件循环，Worker 起后台线程，事件经线程安全 Queue 桥接给 WebSocket（`run_manager.py`）。
-- **启动器进程组**：`start.py` 用 `start_new_session=True` 让子进程独立成组，Ctrl+C 时 `os.killpg` 整组杀；开发模式先探测后端端口就绪再起前端（避免 vite 代理 ECONNREFUSED）。
+- **启动器进程组**：`main.py` 用 `start_new_session=True` 让子进程独立成组，Ctrl+C 时 `os.killpg` 整组杀；开发模式先探测后端端口就绪再起前端（避免 vite 代理 ECONNREFUSED）。
+- **启动前清理残留**：`main.py` 启动前按端口（dev 8077/5177，prod 80）定位占用进程，**凡占用目标端口的进程一律终止**（SIGTERM→SIGKILL）并打印被终止进程的 pid 与命令行；终止后复查端口，仍被占用则告警并中止启动。
 - **前端锁 Node 16 兼容版本线**：Vite 4.5 + Vue 3.4 + Element Plus 2（Vite 5 要 Node 18+）。
 - **三个执行入口、三套 manager**：单用例（`run_manager.py`，UI 用例）、接口场景（`api_run_manager.py`）、测试计划（`execution_manager.py`，批量 + `run-sync` 同步接口供 CI 调用）。UI 执行与接口场景执行均后台线程，事件经线程安全 Queue 桥接给 WebSocket。
-- **录制功能门控**：`start.py` 给后端注入 `RECORDING_ENABLED=1`（需真实有头浏览器）；云端部署不设该变量则录制接口 403 + 前端隐藏入口。
+- **录制功能门控**：`main.py` 给后端注入 `RECORDING_ENABLED=1`（需真实有头浏览器）；云端部署不设该变量则录制接口 403 + 前端隐藏入口。
 - **安全**：REST/WS 默认无鉴权，仅限内网/本机部署；CORS 全开（`allow_origins=["*"]`）；截图接口已防路径穿越。
 - **执行模板**：`execution_template` 表编排批量用例执行，支持超时、失败策略；`execution_run` 表记录执行结果；API `POST /api/execution-templates/{id}/run-sync` 供 CI 同步触发并阻塞等待结果。
 

@@ -123,7 +123,7 @@ const classifying = ref(false)
 const classifyingId = ref(null)
 
 function strategyType(s) {
-  return { store: 'info', semantic: 'success', vlm: 'warning', hint: '' }[s] || 'info'
+  return { store: 'info', semantic: 'success', vlm: 'warning', hint: 'info' }[s] || 'info'
 }
 
 function strategyLabel(s) {
@@ -237,15 +237,15 @@ onMounted(() => { load(); loadApp() })
 .bar { display: flex; justify-content: space-between; align-items: center; margin: 4px 0 8px; }
 .bar-actions { display: flex; gap: 6px; }
 .sec-title { font-weight: 600; }
-.desc { color: #909399; font-size: 12px; margin: 0 0 10px; }
+.desc { color: var(--app-text-dim); font-size: 12px; margin: 0 0 10px; }
 .el-type-tag {
   display: inline-block;
   padding: 2px 8px;
   border-radius: 4px;
   font-size: 12px;
-  background: #f0f9eb;
-  color: #67c23a;
-  border: 1px solid #b3e19d;
+  background: var(--app-success-bg);
+  color: var(--app-success-text);
+  border: 1px solid var(--app-success-border);
 }
-.dim { color: #909399; font-size: 12px; }
+.dim { color: var(--app-text-dim); font-size: 12px; }
 </style>

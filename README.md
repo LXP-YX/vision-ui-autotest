@@ -34,7 +34,7 @@ vision-ui-autotest/
 │   ├── backend/          FastAPI + SQLAlchemy（REST + WebSocket，MySQL/SQLite）
 │   ├── frontend/         Vue3 + Vite4 + Element Plus
 │   └── worker/           执行 + CDP 投屏 + AI Planner + 探索/录制/脚本编译
-├── start.py              一键启动器（开发 / 生产模式）
+├── main.py              一键启动器（开发 / 生产模式）
 ├── config.example.yaml   配置模板（复制为 config.yaml 使用）
 ├── run_login.py          无头登录冒烟演示脚本
 └── pytest.ini / conftest.py
@@ -79,10 +79,10 @@ python3 -m pytest                     # pytest 登录冒烟
 
 ```bash
 # 开发模式：后端 127.0.0.1:8077 + 前端 127.0.0.1:5177（热更新，浏览器打开 5177）
-python3 start.py
+python3 main.py
 
 # 生产模式：构建前端后单进程单端口托管（默认 80，特权端口需 sudo）
-sudo python3 start.py --prod
+sudo python3 main.py --prod
 ```
 
 打开平台页面后：左侧维护用例 → 点「执行」→ 右侧 `<canvas>` 实时观看浏览器操作过程与逐步骤结果；执行失败自动截图。
@@ -113,8 +113,57 @@ database:
 
 ## 密钥与加密
 
-- **API Key 不明文落库**：Fernet（AES-128-CBC + HMAC）加密，密文带 `enc:v1:` 前缀；页面列表/编辑始终脱敏显示。
-- **主密钥从环境变量 `AUTOTEST_SECRET_KEY` 注入**，代码内不保留任何固定密钥。未设置时加/解密直接报错。多机共享同一数据库时，各机器须设置相同的值。
+### 工作原理
+
+- **API Key 加密落库**：Fernet（AES-128-CBC + HMAC）对称加密，密文带 `enc:v1:` 前缀。
+- **加密只用一个主密钥**（不是公钥/私钥对）：同一把主密钥既加密也解密，因为平台必须还原明文才能去调用大模型接口。
+- **主密钥与数据库分离存放**：数据库里只有密文，只拿到数据库无法还原 API Key；主密钥不入库、不进代码、不上 Git。
+
+### 主密钥文件
+
+- 路径：**`secrets/master.key`**（单个文件，内容就是一行主密钥字符串，无换行也可）。
+- 该目录已在 `.gitignore`：`secrets/`、`*.key`、`.env` 均被忽略，`git status` 看不到，不会被提交。
+- 权限建议 `600`（仅本人可读），目录建议 `700`。
+- 已为本仓库生成本地主密钥，内容：
+  `cEfiTL4ynya9TIixI0aZskDAmp4mCaYCvzN4l52PUGkxCgi5TqPRBndGx0D2aRPl`
+  **请把它备份到密码管理器**；一旦丢失，已落库的大模型 API Key 将无法解密，需要在页面重新录入。
+
+### 生成或更换主密钥
+
+```bash
+mkdir -p secrets && chmod 700 secrets
+python3 -c "import secrets; open('secrets/master.key','w').write(secrets.token_urlsafe(48))"
+chmod 600 secrets/master.key
+```
+
+> 更换主密钥会让旧密文全部失效（表现为页面「未录入 API Key」、连接测试失败），需在「大模型配置」页面重新保存一次 API Key。
+
+### 启动时如何加载
+
+`python3 main.py` 启动时按以下顺序获取主密钥，**不会自动生成**（避免换机后静默生成新密钥导致旧密文解不开）：
+
+1. 环境变量 `AUTOTEST_SECRET_KEY`（如容器/CI 注入）；
+2. 项目根 `secrets/master.key` 文件。
+
+两者都找不到时，启动器打印生成指引并中止启动。
+
+也可以手动导出（优先级最高）：
+
+```bash
+export AUTOTEST_SECRET_KEY="$(cat secrets/master.key)"
+python3 main.py
+```
+
+### 多机 / 团队共享
+
+- 共用同一个数据库的多台机器**必须使用同一个主密钥**：把 `secrets/master.key` 通过安全渠道（密码管理器、密钥管理服务）分发，或各自注入相同的 `AUTOTEST_SECRET_KEY` 环境变量。
+- **绝不通过 Git、聊天工具、邮件传输主密钥**；`.gitignore` 已兜底，但仍建议用密码管理器分发。
+- 容器部署时用 Secret（k8s Secret / Docker secret）挂载文件或注入环境变量，不要 `COPY` 进镜像。
+
+### 页面展示
+
+- 列表默认掩码显示（如 `sk-sec****6789`），点小眼睛按需向后端请求该条明文；编辑框留空表示不修改 Key。
+- 主密钥缺失或与密文不匹配时，保存接口返回明确错误，列表降级显示「未录入」而不是接口 500。
 - 被测站点账号密码仅存在平台 `test_env` 表（本地 SQLite / 你的 MySQL），`config.yaml` 已 gitignore。
 
 ## 安全须知（部署前必读）

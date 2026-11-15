@@ -103,7 +103,7 @@ function prettyBody(text) {
 <style scoped>
 .detail { font-size: 13px; }
 .mt { margin-top: 8px; }
-.lbl { font-weight: 600; margin: 8px 0 4px; font-size: 12px; color: #606266; }
+.lbl { font-weight: 600; margin: 8px 0 4px; font-size: 12px; color: var(--app-text-regular); }
 .code-box {
   background: #1e1e1e; color: #d4d4d4; border-radius: 4px; padding: 8px;
   font-family: Consolas, Menlo, monospace; font-size: 12px; line-height: 1.5;
@@ -111,7 +111,7 @@ function prettyBody(text) {
 }
 .resp-body { max-height: 320px; }
 .assert-line { font-family: Consolas, Menlo, monospace; font-size: 12px; line-height: 1.7; }
-.ok { color: #67c23a; }
-.err { color: #f56c6c; }
-.dim2 { color: #909399; font-size: 12px; }
+.ok { color: var(--app-success-text); }
+.err { color: var(--app-danger-text); }
+.dim2 { color: var(--app-text-dim); font-size: 12px; }
 </style>

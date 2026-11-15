@@ -20,6 +20,17 @@
       <el-table-column prop="name" label="别名" min-width="120" />
       <el-table-column prop="chat_model" label="对话模型" min-width="110" />
       <el-table-column prop="base_url" label="端点" min-width="200" show-overflow-tooltip />
+      <el-table-column label="API Key" min-width="170">
+        <template #default="{ row }">
+          <div class="key-cell">
+            <span class="key-text">{{ keyText(row) }}</span>
+            <el-tooltip v-if="row.has_api_key" :content="visibleKeys[row.id] ? '隐藏' : '显示明文'" placement="top">
+              <el-button link size="small" :icon="visibleKeys[row.id] ? Hide : View"
+                         @click="toggleKey(row)" />
+            </el-tooltip>
+          </div>
+        </template>
+      </el-table-column>
       <el-table-column label="默认" width="70">
         <template #default="{ row }">
           <el-tag v-if="row.is_default" type="success" size="small">默认</el-tag>
@@ -27,7 +38,6 @@
       </el-table-column>
       <el-table-column label="操作" width="260">
         <template #default="{ row }">
-          <el-button size="small" @click="testConn(row)" :loading="testingId === row.id">测试连接</el-button>
           <el-button size="small" @click="openEdit(row)">编辑</el-button>
           <el-button size="small" type="success" :disabled="row.is_default" @click="setDefault(row)">设默认</el-button>
           <el-tooltip content="删除" placement="top">
@@ -41,13 +51,18 @@
       <el-form :model="form" label-width="90px">
         <el-form-item label="别名"><el-input v-model="form.name" /></el-form-item>
         <el-form-item label="端点 URL"><el-input v-model="form.base_url" placeholder="https://.../v1" /></el-form-item>
-        <el-form-item label="API Key"><el-input v-model="form.api_key" placeholder="pk-... （编辑时留掩码则不改）" /></el-form-item>
+        <el-form-item label="API Key">
+          <el-input v-model="form.api_key" type="password" show-password
+                    :placeholder="form.id ? '留空则不修改' : '请输入 API Key'" />
+          <div class="hint">加密落库，主密钥来自启动环境变量；列表点击小眼睛可看明文</div>
+        </el-form-item>
         <el-form-item label="对话模型"><el-input v-model="form.chat_model" placeholder="GLM-4.6V" /></el-form-item>
         <el-form-item label="视觉模型"><el-input v-model="form.vision_model" placeholder="GLM-4.6V" /></el-form-item>
         <el-form-item label="超时(秒)"><el-input-number v-model="form.timeout" :min="5" :max="300" /></el-form-item>
         <el-form-item label="校验SSL"><el-switch v-model="form.verify_ssl" /></el-form-item>
       </el-form>
       <template #footer>
+        <el-button v-if="form.id" :loading="testingId === form.id" @click="testConn(form)">测试连接</el-button>
         <el-button @click="editVisible = false">取消</el-button>
         <el-button type="primary" @click="save">保存</el-button>
       </template>
@@ -59,7 +74,7 @@
 import { ref, onMounted } from 'vue'
 import axios from 'axios'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Delete } from '@element-plus/icons-vue'
+import { Delete, Hide, View } from '@element-plus/icons-vue'
 import { useIdSort } from '../composables/useIdSort'
 import { useMultiSelect } from '../composables/useMultiSelect'
 
@@ -68,26 +83,47 @@ const { selection, onSelectionChange, batchDelete } = useMultiSelect()
 const editVisible = ref(false)
 const testingId = ref(null)
 const form = ref({})
+const visibleKeys = ref({})   // id -> 明文（已点小眼睛的配置）
 
 async function load() {
   const { data } = await axios.get('/api/llm-configs')
+  visibleKeys.value = {}
   setConfigs(data)
+}
+
+function keyText(row) {
+  if (!row.has_api_key) return '未录入'
+  return visibleKeys.value[row.id] || row.api_key
+}
+
+async function toggleKey(row) {
+  if (visibleKeys.value[row.id]) {
+    delete visibleKeys.value[row.id]
+    return
+  }
+  const { data } = await axios.get(`/api/llm-configs/${row.id}/reveal`)
+  if (!data.api_key) { ElMessage.warning(data.error || '无法解密该 API Key'); return }
+  visibleKeys.value[row.id] = data.api_key
 }
 
 function openEdit(row) {
   form.value = row
-    ? { ...row }
+    ? { ...row, api_key: '' }
     : { id: null, name: '', base_url: 'https://your-llm-endpoint.example.com/v1', api_key: '', chat_model: '', vision_model: '', timeout: 60, verify_ssl: true }
   editVisible.value = true
 }
 
+function buildPayload() {
+  const payload = { ...form.value }
+  delete payload.id; delete payload.is_default; delete payload.enabled; delete payload.has_api_key
+  return { ...payload, enabled: true }
+}
+
 async function save() {
   if (!form.value.name) { ElMessage.warning('请填写别名'); return }
-  const payload = { ...form.value }
-  delete payload.id; delete payload.is_default; delete payload.enabled
-  if (payload.enabled === undefined) payload.enabled = true
-  if (form.value.id) await axios.put(`/api/llm-configs/${form.value.id}`, { ...payload, enabled: true })
-  else await axios.post('/api/llm-configs', { ...payload, enabled: true })
+  const payload = buildPayload()
+  if (form.value.id) await axios.put(`/api/llm-configs/${form.value.id}`, payload)
+  else await axios.post('/api/llm-configs', payload)
   editVisible.value = false
   ElMessage.success('已保存')
   load()
@@ -129,4 +165,7 @@ onMounted(load)
 <style scoped>
 .bar { display: flex; justify-content: space-between; align-items: center; margin: 4px 0 8px; }
 .sec-title { font-weight: 600; }
+.hint { font-size: 12px; color: #909399; line-height: 1.4; margin-top: 4px; }
+.key-cell { display: flex; align-items: center; gap: 4px; }
+.key-text { font-family: monospace; }
 </style>

@@ -10,8 +10,8 @@
 元素确实不存在时返回 None，由调用方判为功能缺陷。
 
 知识库：APP 专属 app_locator 表（与 WEB 的 locator 表级拆分，互不混存），
-selector 存 JSON {"by":..,"value":..}；行维度 platform（android|ios）+
-env_id（app_env.id），查询按 环境精确 → 平台精确 → 全局 优先级回退。
+selector 存 JSON {"by":..,"value":..}；行维度 platform（android|ios），
+查询按 平台精确 → 全局 优先级回退（测试环境管理仅对 WEB 开放，APP 无环境维度）。
 """
 
 from __future__ import annotations
@@ -47,15 +47,13 @@ def _strip_suffix(text: str) -> str:
     return t or (text or "").strip()
 
 
-# ------------------------- 知识库读写（app_locator 表，按平台/环境隔离） -------------------------
+# ------------------------- 知识库读写（app_locator 表，按平台隔离） -------------------------
 
-def _pick_row(rows: list, env_id: Optional[int], platform: Optional[str]):
-    """按优先级挑行：环境+平台精确 > 环境精确 > 平台精确 > 全局。"""
+def _pick_row(rows: list, platform: Optional[str]):
+    """按优先级挑行：平台精确 > 全局。"""
     conds = (
-        lambda r: r.env_id == env_id and r.platform == platform,
-        lambda r: r.env_id == env_id and r.platform is None,
-        lambda r: r.env_id is None and r.platform == platform,
-        lambda r: r.env_id is None and r.platform is None,
+        lambda r: r.platform == platform,
+        lambda r: r.platform is None,
     )
     for cond in conds:
         for r in rows:
@@ -64,14 +62,13 @@ def _pick_row(rows: list, env_id: Optional[int], platform: Optional[str]):
     return None
 
 
-def _store_get(anchor: str, env_id: Optional[int],
-               platform: Optional[str]) -> Optional[dict]:
+def _store_get(anchor: str, platform: Optional[str]) -> Optional[dict]:
     """读知识库：anchor → {by, value}。selector 字段存 JSON。"""
     if not _DB_OK:
         return None
     with SessionLocal() as s:
         rows = s.query(AppLocatorRow).filter(AppLocatorRow.anchor == anchor).all()
-        row = _pick_row(rows, env_id, platform)
+        row = _pick_row(rows, platform)
         if not row or not row.selector:
             return None
         try:
@@ -84,16 +81,16 @@ def _store_get(anchor: str, env_id: Optional[int],
 
 
 def _store_save(anchor: str, locator: dict, strategy: str, hit: bool,
-                env_id: Optional[int], platform: Optional[str]) -> None:
+                platform: Optional[str]) -> None:
     if not _DB_OK:
         return
     selector = json.dumps(locator, ensure_ascii=False)
     with SessionLocal() as s:
         rows = s.query(AppLocatorRow).filter(AppLocatorRow.anchor == anchor).all()
-        row = _pick_row(rows, env_id, platform)
+        row = _pick_row(rows, platform)
         if not row:
             row = AppLocatorRow(anchor=anchor, selector=selector, strategy=strategy,
-                                env_id=env_id, platform=platform)
+                                platform=platform)
             s.add(row)
         else:
             row.selector = selector
@@ -172,15 +169,13 @@ def _find_semantic(nodes: list[UiNode], anchor: str) -> Optional[dict]:
 # ------------------------- 对外入口 -------------------------
 
 def find_element(driver: DeviceDriver, anchor: str,
-                 locator_hint: Optional[dict] = None,
-                 env_id: Optional[int] = None) -> Optional[dict]:
+                 locator_hint: Optional[dict] = None) -> Optional[dict]:
     """三级定位 + 自愈回写。
 
     Args:
         driver:       DeviceDriver（platform 自动作为知识库行维度）
         anchor:       目标元素的自然语言描述（知识库主键）
         locator_hint: 可选，手动指定 {by, value}，优先级最高；失败直接返回 None
-        env_id:       APP 测试环境 id（app_env.id），知识库按环境隔离
     Returns:
         {by, value, bounds, center, strategy}；彻底找不到返回 None。
     """
@@ -200,11 +195,11 @@ def find_element(driver: DeviceDriver, anchor: str,
         return None
 
     # ① Store 命中
-    cached = _store_get(anchor, env_id, platform)
+    cached = _store_get(anchor, platform)
     if cached and nodes:
         hit = _find_by_locator(nodes, cached)
         if hit:
-            _store_save(anchor, cached, "store", hit=True, env_id=env_id, platform=platform)
+            _store_save(anchor, cached, "store", hit=True, platform=platform)
             hit["strategy"] = "store"
             return hit
 
@@ -213,7 +208,7 @@ def find_element(driver: DeviceDriver, anchor: str,
         hit = _find_semantic(nodes, anchor)
         if hit:
             loc = {"by": hit["by"], "value": hit["value"]}
-            _store_save(anchor, loc, "xml", hit=True, env_id=env_id, platform=platform)
+            _store_save(anchor, loc, "xml", hit=True, platform=platform)
             hit["strategy"] = "xml"
             return hit
 
@@ -226,7 +221,7 @@ def find_element(driver: DeviceDriver, anchor: str,
         loc = {"by": v["by"], "value": v["value"]}
         # 回验：用生成的 locator 再查一次控件树，确认可复现
         if not nodes or _find_by_locator(nodes, loc):
-            _store_save(anchor, loc, "vlm", hit=True, env_id=env_id, platform=platform)
+            _store_save(anchor, loc, "vlm", hit=True, platform=platform)
             return {
                 "by": v["by"], "value": v["value"],
                 "bounds": v["bounds"], "center": v["center"],
@@ -235,5 +230,5 @@ def find_element(driver: DeviceDriver, anchor: str,
 
     # 三级都失败：判为功能缺陷，不伪造
     if cached:
-        _store_save(anchor, cached, "store", hit=False, env_id=env_id, platform=platform)
+        _store_save(anchor, cached, "store", hit=False, platform=platform)
     return None

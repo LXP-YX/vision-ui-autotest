@@ -133,10 +133,10 @@ async function stop() {
 .bar { display: flex; justify-content: space-between; align-items: center; margin: 4px 0 8px; }
 .sec-title { font-weight: 600; }
 .mb { margin-bottom: 10px; }
-.acts { background: #f6f8fa; border-radius: 4px; padding: 12px; min-height: 300px; max-height: 60vh; overflow: auto; }
+.acts { background: var(--app-surface-sub); border-radius: 4px; padding: 12px; min-height: 300px; max-height: 60vh; overflow: auto; }
 .act { display: flex; gap: 8px; font-size: 13px; line-height: 2; }
-.act .idx { flex: none; width: 24px; color: #909399; }
-.hint2 { color: #8a919f; font-size: 13px; text-align: center; padding: 40px; }
-.draft { border-left: 3px solid #67c23a; background: #f0f9eb; padding: 6px 10px; margin-bottom: 8px; }
-.draft .step-line { font-size: 12px; color: #606266; line-height: 1.6; }
+.act .idx { flex: none; width: 24px; color: var(--app-text-dim); }
+.hint2 { color: var(--app-text-dim); font-size: 13px; text-align: center; padding: 40px; }
+.draft { border-left: 3px solid var(--app-success-text); background: var(--app-success-bg); padding: 6px 10px; margin-bottom: 8px; }
+.draft .step-line { font-size: 12px; color: var(--app-text-regular); line-height: 1.6; }
 </style>

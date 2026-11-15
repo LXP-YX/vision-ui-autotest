@@ -5,8 +5,9 @@
   Authorization 头，故不能用哈希（不可逆）。
 - 主密钥从环境变量 `AUTOTEST_SECRET_KEY` 注入（部署时由运维/平台提供），
   代码内不保留任何固定密钥；未设置时抛错并给出指引。
+  主密钥不入库：仅拿到数据库无法解密，API Key 不会随 DB 泄露。
 - 密文带前缀 enc:v1: 便于识别与幂等；encrypt 对已加密值原样返回（幂等）。
-- decrypt 只接受带前缀的密文：无前缀的值视为不合法，返回空串（不再兼容明文
+- decrypt 只接受带前缀的密文：无前缀的值视为不合法，返回空串（不兼容明文
   落库的历史遗留，避免敏感值明文存库）。
 - 跨机共享同一数据库时，各机器需设置相同的环境变量才能互相解密。
 """
@@ -51,6 +52,11 @@ def _get_fernet() -> Fernet:
     return _fernet
 
 
+def is_configured() -> bool:
+    """主密钥是否已注入（用于页面给出明确提示，而非调用时才报错）。"""
+    return bool(os.environ.get(KEY_ENV, ""))
+
+
 def encrypt(plaintext: str) -> str:
     """加密明文，返回带 enc:v1: 前缀的密文。
 
@@ -81,3 +87,12 @@ def decrypt(value: str) -> str:
     except (InvalidToken, ValueError):
         print("[crypto] 解密失败：主密钥不匹配或密文损坏，返回空串")
         return ""
+
+
+def mask(plaintext: str) -> str:
+    """展示用掩码：保留首 6 位与末 4 位，过短则整体掩码。"""
+    if not plaintext:
+        return ""
+    if len(plaintext) > 12:
+        return plaintext[:6] + "****" + plaintext[-4:]
+    return "****"

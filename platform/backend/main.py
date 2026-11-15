@@ -86,10 +86,9 @@ class CaseIn(BaseModel):
     allow_risky: bool = False
     # APP 自动化；driver_type='app' 时由 App 工作台填写
     driver_type: str = "web"
-    app_env_id: int | None = None  # APP 测试环境（平台+设备+被测 App）
-    app_package: str = ""          # 旧字段：未绑环境时兼容 android
-    app_activity: str = ""
-    device_serial: str = ""        # 临时手动覆盖设备（优先于环境 device_id）
+    app_package: str = ""          # 被测 App 包名 / bundle_id
+    app_activity: str = ""         # Android 启动 Activity，iOS 留空
+    device_serial: str = ""        # 执行设备 serial / udid
 
 
 # ------------------------- 用例 CRUD -------------------------
@@ -308,9 +307,10 @@ def explore(body: ExploreIn):
 
 @app.post("/api/cases/{case_id}/compile")
 def compile_case_script(case_id: int):
-    """AI 编译/重新编译用例的 Playwright Python 脚本，同步返回脚本内容。
+    """编译/重新编译用例脚本，同步返回脚本内容（APP 用例编译双平台统一脚本）。
 
-    在线程池里跑 LLM 调用（可能耗时 10-60s），编译成功则落库并返回脚本。
+    WEB：AI 翻译为 Playwright Python 脚本；APP：生成内嵌步骤的 core_app 执行脚本
+    （平台由运行时环境变量选择，Android/iOS 通用）。成功则落库并返回脚本。
     """
     import concurrent.futures
     from datetime import datetime
@@ -319,9 +319,8 @@ def compile_case_script(case_id: int):
         c = s.get(TestCase, case_id)
         if not c:
             raise HTTPException(404, "用例不存在")
-        if (c.driver_type or "web") == "app":
-            raise HTTPException(400, "APP 用例不编译 Playwright 脚本（APP 引擎按自然语言直接执行，无需脚本编译）")
         case_dict = c.to_dict()
+    is_app = (case_dict.get("driver_type") or "web") == "app"
 
     def _do_compile():
         import sys
@@ -332,8 +331,8 @@ def compile_case_script(case_id: int):
         worker_dir = Path(__file__).resolve().parent.parent / "worker"
         if str(worker_dir) not in sys.path:
             sys.path.insert(0, str(worker_dir))
-        from script_compiler import compile_to_playwright  # type: ignore
-        return compile_to_playwright(case_dict)
+        from script_compiler import compile_to_app_script, compile_to_playwright  # type: ignore
+        return (compile_to_app_script if is_app else compile_to_playwright)(case_dict)
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
         fut = pool.submit(_do_compile)
@@ -343,7 +342,7 @@ def compile_case_script(case_id: int):
             raise HTTPException(504, "AI 编译超时，请重试")
 
     if not script_py:
-        raise HTTPException(502, "LLM 不可用或编译失败")
+        raise HTTPException(502, "编译失败（APP 用例无步骤，或 LLM 不可用）" if is_app else "LLM 不可用或编译失败")
 
     with SessionLocal() as s:
         c = s.get(TestCase, case_id)
@@ -361,15 +360,12 @@ class ScriptPyIn(BaseModel):
 
 @app.put("/api/cases/{case_id}/script-py")
 def update_case_script_py(case_id: int, body: ScriptPyIn):
-    """手动保存/覆盖用例的 Playwright Python 脚本。"""
+    """手动保存/覆盖用例脚本（WEB=Playwright，APP=core_app 执行脚本）。"""
     from datetime import datetime
     with SessionLocal() as s:
         c = s.get(TestCase, case_id)
         if not c:
             raise HTTPException(404, "用例不存在")
-        if (c.driver_type or "web") == "app":
-            raise HTTPException(400, "APP 用例无 Playwright 脚本")
-        c.script_py = body.script_py
         c.script_py = body.script_py
         c.script_updated_at = datetime.now()
         s.commit()
@@ -457,6 +453,14 @@ def list_llm_configs():
         return [c.to_dict(mask=True) for c in s.query(LLMConfig).order_by(LLMConfig.id).all()]
 
 
+def _encrypt_api_key(raw: str) -> str:
+    """加密 api_key；主密钥未注入时返回 400 明确提示，而非 500。"""
+    try:
+        return crypto.encrypt(raw)
+    except RuntimeError as e:
+        raise HTTPException(400, str(e)) from None
+
+
 @app.post("/api/llm-configs")
 def create_llm_config(body: LLMConfigIn):
     with SessionLocal() as s:
@@ -464,7 +468,7 @@ def create_llm_config(body: LLMConfigIn):
         is_first = s.query(LLMConfig).count() == 0
         data = body.model_dump()
         # api_key 加密落库（明文不入库）
-        data["api_key"] = crypto.encrypt(data.get("api_key") or "")
+        data["api_key"] = _encrypt_api_key(data.get("api_key") or "")
         c = LLMConfig(**data, is_default=is_first)
         s.add(c)
         s.commit()
@@ -484,12 +488,27 @@ def update_llm_config(cfg_id: int, body: LLMConfigIn):
             data.pop("api_key")
         else:
             # 传了新 key：加密后再落库
-            data["api_key"] = crypto.encrypt(data.get("api_key") or "")
+            data["api_key"] = _encrypt_api_key(data.get("api_key") or "")
         for k, v in data.items():
             setattr(c, k, v)
         s.commit()
         s.refresh(c)
         return c.to_dict()
+
+
+@app.get("/api/llm-configs/{cfg_id}/reveal")
+def reveal_llm_config_key(cfg_id: int):
+    """按需返回单条配置的明文 API Key（列表默认只给掩码，点小眼睛才取明文）。"""
+    with SessionLocal() as s:
+        c = s.get(LLMConfig, cfg_id)
+        if not c:
+            raise HTTPException(404, "配置不存在")
+        if not c.api_key:
+            return {"api_key": "", "error": "该配置未录入 API Key"}
+        key = c.plain_api_key
+        if not key:
+            return {"api_key": "", "error": "无法解密：主密钥（AUTOTEST_SECRET_KEY）与密文不匹配或未设置"}
+        return {"api_key": key}
 
 
 @app.delete("/api/llm-configs/{cfg_id}")
@@ -796,7 +815,7 @@ async def ws_run(ws: WebSocket, run_id: int):
 
 
 # ------------------------- 录制式生成（方式 C，§3.6） -------------------------
-# 仅本地开放：start.py 会给子进程注入 RECORDING_ENABLED=1；云端镜像/k8s 不设置该
+# 仅本地开放：main.py 会给子进程注入 RECORDING_ENABLED=1；云端镜像/k8s 不设置该
 # 变量则接口 403 + 前端隐藏入口。原因：云端无物理显示器，录制需要真实有头浏览器。
 
 def _recording_enabled() -> bool:

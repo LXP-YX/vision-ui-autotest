@@ -456,24 +456,24 @@ onBeforeUnmount(() => {
 <style scoped>
 .exec-view { padding: 0; }
 .bar { display: flex; align-items: center; justify-content: space-between; margin: 8px 0; }
-.sec-title { font-size: 14px; font-weight: 600; color: #303133; }
-.tip { color: #909399; font-size: 12px; }
-.tpl-id { font-family: Menlo, monospace; color: #303133; }
-.run-expand { padding: 8px 24px 12px 48px; background: #fafbfc; }
-.inner-table :deep(th) { background: #eef2f7 !important; }
+.sec-title { font-size: 14px; font-weight: 600; color: var(--app-text); }
+.tip { color: var(--app-text-dim); font-size: 12px; }
+.tpl-id { font-family: Menlo, monospace; color: var(--app-text); }
+.run-expand { padding: 8px 24px 12px 48px; background: var(--app-surface-sub); }
+.inner-table :deep(th) { background: var(--app-surface-sub) !important; }
 .summary { display: inline-flex; gap: 4px; flex-wrap: wrap; }
-.err-msg { color: #f56c6c; }
+.err-msg { color: var(--app-danger-text); }
 .drawer-body { padding: 4px 16px 24px; }
 .drawer-sec { margin-top: 16px; }
-.drawer-sec-title { font-weight: 600; margin-bottom: 8px; color: #303133; }
-.step-detail { color: #606266; font-size: 12px; margin-top: 2px; }
-.logs { max-height: 260px; overflow: auto; background: #f5f7fa; border-radius: 4px; padding: 8px 12px; }
-.log { font-family: Menlo, monospace; font-size: 12px; line-height: 1.6; color: #303133; }
-.log.error { color: #f56c6c; }
-.log.warn { color: #e6a23c; }
-.log-ts { color: #909399; margin-right: 6px; }
+.drawer-sec-title { font-weight: 600; margin-bottom: 8px; color: var(--app-text); }
+.step-detail { color: var(--app-text-regular); font-size: 12px; margin-top: 2px; }
+.logs { max-height: 260px; overflow: auto; background: var(--app-surface-sub); border-radius: 4px; padding: 8px 12px; }
+.log { font-family: Menlo, monospace; font-size: 12px; line-height: 1.6; color: var(--app-text); }
+.log.error { color: var(--app-danger-text); }
+.log.warn { color: var(--app-warning-text); }
+.log-ts { color: var(--app-text-dim); margin-right: 6px; }
 .shots { display: flex; flex-wrap: wrap; gap: 8px; }
-.shot { max-width: 320px; max-height: 240px; border: 1px solid #dcdfe6; border-radius: 4px; }
+.shot { max-width: 320px; max-height: 240px; border: 1px solid var(--app-border-strong); border-radius: 4px; }
 
 /* 隐藏内建的 expand 列：宽度压到 0、不显示图标格，仍保留展开容器 */
 :deep(.el-table th.col-hidden),

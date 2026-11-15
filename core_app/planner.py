@@ -1,10 +1,11 @@
-"""App Planner：把一条中文步骤解析为结构化 App 动作（function call，平台感知）。
+"""App Planner：把一条中文步骤解析为结构化 App 动作（function call，双平台统一）。
 
-动作集（iOS / Android 共用，能力差异由驱动层吸收）：
+动作集（Android / iOS 共用，同一份用例/脚本可跨平台复用，平台差异由驱动层吸收）：
 - tap_element(target)        三级定位找元素 → 驱动点击
-- type_text(target, text)    定位输入框 → 输入（iOS 支持 Unicode；Android 仅 ASCII）
+- type_text(target, text)    定位输入框 → 输入（双平台原生 Unicode）
 - swipe(direction)           方向滑动 up/down/left/right
-- press_key(key)             逻辑键名（home/back/enter/...，各平台映射见 drivers/base.LOGICAL_KEYS）
+- press_key(key)             逻辑键名（back/home/enter/...，各平台映射见 drivers/base.LOGICAL_KEYS；
+                             back 在 iOS 走边缘返回手势，用例无需区分平台）
 - assert_visual(claim)       VLM 视觉断言
 - launch_app(app_id)         启动被测 App（Android=package，iOS=bundle_id；activity 仅 Android 可选）
 - wait(seconds)              原地等待
@@ -20,16 +21,9 @@ from core.llm_client import plan_with_tools
 
 def _tools(platform: str) -> list[dict]:
     """按平台构造动作集（差异仅体现在描述文案与参数说明里）。"""
-    input_note = (
-        "要输入的内容（iOS 原生支持中文等任意 Unicode 字符）"
-        if platform == "ios"
-        else "要输入的内容（Android 的 adb input 仅支持 ASCII，中文不支持）"
-    )
-    key_note = (
-        "逻辑键名，如 home/volume_up/volume_down/enter（iOS 无 back 键）"
-        if platform == "ios"
-        else "逻辑键名，如 home/back/enter/volume_up/volume_down"
-    )
+    # 双平台统一 Appium 后，输入与按键能力一致（用例可跨平台复用）
+    input_note = "要输入的内容（双平台均原生支持中文等任意 Unicode 字符）"
+    key_note = "逻辑键名，如 back/home/enter/volume_up/volume_down（back 在 iOS 走边缘返回手势）"
     launch_desc = (
         "启动指定 App。当步骤表达'启动/打开 X App'或用例首步要拉起被测 App 时使用。"
         "app_id 填 bundle_id，如 com.example.myapp。"

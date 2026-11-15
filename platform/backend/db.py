@@ -91,13 +91,11 @@ class TestCase(Base):
     script_py: Mapped[str] = mapped_column(Text, nullable=True, default=None)
     script_updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
     # APP 自动化：driver_type='app' 走 core_app，缺省 'web' 走 Playwright。
-    # app_env_id 绑定 app_env 环境（平台+设备+App）；device_serial 保留为临时手动覆盖。
-    # app_package/app_activity 为旧字段，仅当用例未绑环境时兼容使用（android）。
+    # device_serial 为执行设备（serial / udid），app_package/app_activity 为被测 App。
     driver_type: Mapped[str] = mapped_column(String(20), default="web")
     app_package: Mapped[str] = mapped_column(String(200), default="")
     app_activity: Mapped[str] = mapped_column(String(200), default="")
     device_serial: Mapped[str] = mapped_column(String(100), default="")
-    app_env_id: Mapped[int] = mapped_column(Integer, nullable=True)  # 关联 app_env.id
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.now, onupdate=datetime.now
@@ -120,7 +118,6 @@ class TestCase(Base):
             "app_package": self.app_package or "",
             "app_activity": self.app_activity or "",
             "device_serial": self.device_serial or "",
-            "app_env_id": self.app_env_id,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
         }
@@ -177,18 +174,24 @@ class LLMConfig(Base):
 
     @property
     def plain_api_key(self) -> str:
-        """解密后的明文 api_key（供调用方发接口用）。"""
-        return crypto.decrypt(self.api_key or "")
+        """解密后的明文 api_key（供调用方发接口用）。
+
+        主密钥未注入或与密文不匹配时返回空串，避免列表等只读接口直接 500。
+        """
+        try:
+            return crypto.decrypt(self.api_key or "")
+        except RuntimeError:
+            return ""
 
     def to_dict(self, mask: bool = True) -> dict:
-        key = self.plain_api_key
-        if mask and key:
-            key = key[:6] + "****" + key[-4:] if len(key) > 12 else "****"
+        """页面展示用字典：api_key 默认脱敏，不返回明文。"""
+        raw = self.plain_api_key
         return {
             "id": self.id,
             "name": self.name,
             "base_url": self.base_url,
-            "api_key": key,
+            "api_key": crypto.mask(raw) if mask else raw,
+            "has_api_key": bool(raw),
             "chat_model": self.chat_model,
             "vision_model": self.vision_model,
             "timeout": self.timeout,
@@ -238,8 +241,7 @@ class AppLocator(Base):
     """APP 自愈知识库（与 WEB 的 locator 表级拆分）：自然语言锚点 → 结构化定位。
 
     selector 存 JSON 字符串 {"by":..,"value":..}，by ∈ text/desc/resource_id；
-    strategy ∈ store|xml|vlm；platform ∈ android|ios（NULL=平台通用）；
-    env_id 关联 app_env.id（NULL=全局通用，与环境无关的锚点）。
+    strategy ∈ store|xml|vlm；platform ∈ android|ios（NULL=平台通用）。
     """
 
     __tablename__ = "app_locator"
@@ -249,7 +251,6 @@ class AppLocator(Base):
     selector: Mapped[str] = mapped_column(String(500), default="")  # JSON {"by","value"}
     strategy: Mapped[str] = mapped_column(String(20), default="store")  # store|xml|vlm
     platform: Mapped[str] = mapped_column(String(10), nullable=True)  # android|ios，NULL=通用
-    env_id: Mapped[int] = mapped_column(Integer, nullable=True)  # 关联 app_env.id，NULL=全局
     hit_count: Mapped[int] = mapped_column(Integer, default=0)
     fail_count: Mapped[int] = mapped_column(Integer, default=0)
     updated_at: Mapped[datetime] = mapped_column(
@@ -265,7 +266,6 @@ class AppLocator(Base):
             "selector": self.selector,
             "strategy": self.strategy,
             "platform": self.platform,
-            "env_id": self.env_id,
             "hit_count": self.hit_count,
             "fail_count": self.fail_count,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
@@ -307,51 +307,6 @@ class TestEnv(Base):
             "id": self.id, "name": self.name, "base_url": self.base_url,
             "username": self.username,
             "password": pwd, "is_default": self.is_default,
-            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
-        }
-
-
-class AppEnv(Base):
-    """APP 测试环境：平台 + 设备 + 被测 App（+ 可选登录账号）绑成一套环境。
-
-    与 WEB 的 test_env 完全独立。执行 APP 用例时按 app_env_id 取环境：
-    platform 决定驱动实现（android=ADB / ios=Appium），device_id 为
-    设备序号（serial）或 iOS 设备标识（udid）。
-    """
-
-    __tablename__ = "app_env"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    name: Mapped[str] = mapped_column(String(100), nullable=False)
-    platform: Mapped[str] = mapped_column(String(10), default="android")  # android|ios
-    device_id: Mapped[str] = mapped_column(String(100), default="")  # serial / udid
-    app_id: Mapped[str] = mapped_column(String(200), default="")  # package / bundle_id
-    app_activity: Mapped[str] = mapped_column(String(200), default="")  # Android 启动 Activity，iOS 留空
-    username: Mapped[str] = mapped_column(String(100), default="")  # 可选登录账号
-    password: Mapped[str] = mapped_column(String(200), default="")  # 可选登录密码
-    remark: Mapped[str] = mapped_column(String(300), default="")
-    is_default: Mapped[bool] = mapped_column(Boolean, default=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime, default=datetime.now, onupdate=datetime.now
-    )
-
-    def to_dict(self, mask: bool = True) -> dict:
-        pwd = self.password or ""
-        if mask and pwd:
-            pwd = "****"
-        return {
-            "id": self.id,
-            "name": self.name,
-            "platform": self.platform or "android",
-            "device_id": self.device_id or "",
-            "app_id": self.app_id or "",
-            "app_activity": self.app_activity or "",
-            "username": self.username or "",
-            "password": pwd,
-            "remark": self.remark or "",
-            "is_default": bool(self.is_default),
-            "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
         }
 
@@ -653,9 +608,8 @@ def _migrate_add_columns() -> None:
         ("test_case", "app_package", "VARCHAR(200) DEFAULT ''"),
         ("test_case", "app_activity", "VARCHAR(200) DEFAULT ''"),
         ("test_case", "device_serial", "VARCHAR(100) DEFAULT ''"),
-        # WEB/APP 解耦：自愈知识库加环境维度；用例绑定 APP 测试环境
+        # WEB/APP 解耦：WEB 自愈知识库按测试环境隔离
         ("locator", "env_id", "INTEGER NULL"),
-        ("test_case", "app_env_id", "INTEGER NULL"),
     ]
     insp = inspect(ENGINE)
     for table, column, ddl in specs:
@@ -667,6 +621,20 @@ def _migrate_add_columns() -> None:
         with ENGINE.begin() as conn:
             conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}"))
         print(f"[db] 迁移：{table} 补列 {column}")
+
+    # APP 测试环境已废弃（测试环境管理仅对 WEB 开放）。清理历史遗留的表与列，
+    # 避免旧库里残留的 app_env 数据与悬空外键引用。
+    obsolete = [("app_env", None), ("test_case", "app_env_id"), ("app_locator", "env_id")]
+    with ENGINE.begin() as conn:
+        for table, column in obsolete:
+            if not insp.has_table(table):
+                continue
+            if column is None:
+                conn.execute(text(f"DROP TABLE {table}"))
+                print(f"[db] 迁移：删除废弃表 {table}")
+            elif column in {c["name"] for c in insp.get_columns(table)}:
+                conn.execute(text(f"ALTER TABLE {table} DROP COLUMN {column}"))
+                print(f"[db] 迁移：删除废弃列 {table}.{column}")
 
 
 def _seed_test_env() -> None:

@@ -726,9 +726,9 @@ onMounted(() => { loadDefs(); loadEnvs().then(loadVars); loadScenarios() })
 .mt { margin-top: 8px; }
 .picker { display: flex; align-items: center; gap: 8px; }
 .row-line { display: flex; gap: 6px; align-items: center; margin-bottom: 6px; }
-.row-line .idx { width: 18px; color: #909399; font-size: 12px; }
-.step-hint { color: #909399; font-size: 12px; }
-.step-hint code { background: rgba(0,0,0,0.06); padding: 0 3px; border-radius: 2px; }
+.row-line .idx { width: 18px; color: var(--app-text-dim); font-size: 12px; }
+.step-hint { color: var(--app-text-dim); font-size: 12px; }
+.step-hint code { background: var(--app-code-bg); padding: 0 3px; border-radius: 2px; }
 .log-box { height: 460px; overflow: auto; background: #1e1e1e; border-radius: 4px; padding: 8px; font-family: monospace; font-size: 12px; }
 .log-box .empty { color: #888; }
 .log-line { line-height: 1.6; white-space: pre-wrap; word-break: break-all; }
@@ -736,9 +736,9 @@ onMounted(() => { loadDefs(); loadEnvs().then(loadVars); loadScenarios() })
 .log-line.ok { color: #6bd968; }
 .log-line.err { color: #f56c6c; }
 .log-line.dim { color: #909399; }
-.err { color: #f56c6c; }
-.ok { color: #529b2e; }
-.dim2 { color: #909399; font-size: 12px; }
+.err { color: var(--app-danger-text); }
+.ok { color: var(--app-success-text); }
+.dim2 { color: var(--app-text-dim); font-size: 12px; }
 .code-box {
   background: #1e1e1e; color: #d4d4d4; border-radius: 4px; padding: 8px;
   font-family: Consolas, Menlo, monospace; font-size: 12px; line-height: 1.5;

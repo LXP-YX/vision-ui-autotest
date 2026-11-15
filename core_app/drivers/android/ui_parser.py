@@ -20,8 +20,11 @@ def parse_bounds(b: str) -> tuple[int, int, int, int] | None:
 
 
 def parse(xml: str) -> list[UiNode]:
-    """把 uiautomator dump 的 XML 归一化为 UiNode 列表。
+    """把控件树 XML 归一化为 UiNode 列表。
 
+    兼容两种来源格式：
+      - uiautomator dump：<node class="android.widget.X" .../>；
+      - Appium UiAutomator2 page_source：标签即类名 <android.widget.X .../>（无 <node>）。
     跳过零面积节点（不可见/折叠控件）；解析失败返回空列表（不抛错，
     语义定位与 VLM 反查层负责给出「未找到」结论）。
     """
@@ -30,15 +33,17 @@ def parse(xml: str) -> list[UiNode]:
     except ET.ParseError:
         return []
     nodes: list[UiNode] = []
-    for el in root.iter("node"):
+    for el in root.iter():
         b = parse_bounds(el.get("bounds", ""))
         if not b or (b[2] - b[0]) <= 0 or (b[3] - b[1]) <= 0:
             continue
+        # class 优先取 class 属性（uiautomator dump）；Appium 无该属性时用标签名
+        cls = el.get("class") or (el.tag if el.tag != "hierarchy" else "")
         nodes.append(UiNode(
             text=el.get("text", "") or "",
             desc=el.get("content-desc", "") or "",
             res_id=el.get("resource-id", "") or "",
-            cls=el.get("class", "") or "",
+            cls=cls or "",
             bounds=b,
             clickable=(el.get("clickable", "") == "true"),
             enabled=(el.get("enabled", "true") != "false"),

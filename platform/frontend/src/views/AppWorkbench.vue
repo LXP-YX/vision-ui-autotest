@@ -36,17 +36,12 @@
           </template>
           <el-table :data="appCases" size="small" max-height="560" empty-text="暂无 App 用例（driver_type=app）">
             <el-table-column prop="name" label="名称" min-width="100" show-overflow-tooltip />
-            <el-table-column label="环境" min-width="110" show-overflow-tooltip>
-              <template #default="{ row }">{{ envName(row.app_env_id) || '未绑定（旧字段）' }}</template>
+            <el-table-column prop="device_serial" label="执行设备" min-width="120" show-overflow-tooltip>
+              <template #default="{ row }">{{ row.device_serial || '未指定' }}</template>
             </el-table-column>
-            <el-table-column label="平台" width="70" align="center">
-              <template #default="{ row }">
-                <el-tag size="small" :type="(envPlatform(row.app_env_id) || 'android') === 'ios' ? 'warning' : 'success'">
-                  {{ (envPlatform(row.app_env_id) || 'android') === 'ios' ? 'iOS' : 'Android' }}
-                </el-tag>
-              </template>
+            <el-table-column prop="app_package" label="被测 App" min-width="140" show-overflow-tooltip>
+              <template #default="{ row }">{{ row.app_package || '—' }}</template>
             </el-table-column>
-            <el-table-column prop="device_serial" label="设备覆盖" width="100" show-overflow-tooltip />
             <el-table-column label="操作" width="140" align="center">
               <template #default="{ row }">
                 <el-button size="small" type="success" link :loading="running && runId && runCaseId === row.id"
@@ -150,16 +145,19 @@
     <el-dialog v-model="editorDlg" :title="editorForm.id ? '编辑 App 用例' : '新建 App 用例'" width="600px">
       <el-form label-width="110px">
         <el-form-item label="用例名称"><el-input v-model="editorForm.name" /></el-form-item>
-        <el-form-item label="APP 测试环境">
-          <el-select v-model="editorForm.app_env_id" placeholder="选择 APP 测试环境（决定平台/设备/被测 App）"
-                     style="width:100%" clearable>
-            <el-option v-for="e in appEnvs" :key="e.id"
-                       :label="`${e.name}（${e.platform === 'ios' ? 'iOS' : 'Android'} · ${e.device_id}）`" :value="e.id" />
+        <el-form-item label="执行设备">
+          <el-select v-model="editorForm.device_serial" filterable allow-create default-first-option
+                     placeholder="选择已连接设备或直接输入 serial / udid" style="width:100%">
+            <el-option v-for="d in devices" :key="deviceKey(d)"
+                       :label="`${deviceLabel(d)}`" :value="deviceKey(d)" />
           </el-select>
-          <div class="dim">环境在「APP 测试环境」页面维护；旧用例未绑环境时按 Android 兼容执行</div>
+          <div class="dim">用例在该设备上执行；留空则执行时回退到工作台当前选中的设备</div>
         </el-form-item>
-        <el-form-item label="设备覆盖（可选）">
-          <el-input v-model="editorForm.device_serial" placeholder="临时指定设备 serial/udid，留空则用环境设备" />
+        <el-form-item label="被测 App">
+          <el-input v-model="editorForm.app_package" placeholder="包名 / bundle_id，如 com.example.myapp" />
+        </el-form-item>
+        <el-form-item label="启动 Activity">
+          <el-input v-model="editorForm.app_activity" placeholder="Android 启动 Activity，iOS 留空" />
         </el-form-item>
         <el-form-item label="步骤（每行一步，自然语言）">
           <el-input v-model="stepText" type="textarea" :rows="8"
@@ -487,28 +485,6 @@ async function onKbdInput(e) {
   }
 }
 
-// ---- APP 测试环境 ----
-const appEnvs = ref([])
-
-async function loadEnvs() {
-  try {
-    const { data } = await axios.get('/api/app/envs')
-    appEnvs.value = data || []
-  } catch (e) {
-    appEnvs.value = []
-  }
-}
-
-function envName(id) {
-  const e = appEnvs.value.find(x => x.id === id)
-  return e ? e.name : ''
-}
-
-function envPlatform(id) {
-  const e = appEnvs.value.find(x => x.id === id)
-  return e ? e.platform : ''
-}
-
 // ---- App 用例管理 ----
 const appCases = computed(() => cases.value.filter(c => (c.driver_type || 'web') === 'app'))
 const cases = ref([])
@@ -524,19 +500,26 @@ async function loadCases() {
 
 // 用例编辑器
 const editorDlg = ref(false)
-const editorForm = ref({ id: null, name: '', app_env_id: null, device_serial: '' })
+const editorForm = ref({
+  id: null, name: '', device_serial: '', app_package: '', app_activity: '',
+})
 const stepText = ref('')
 
 function openEditor(row) {
   if (row) {
     editorForm.value = {
       id: row.id, name: row.name,
-      app_env_id: row.app_env_id || null,
       device_serial: row.device_serial || '',
+      app_package: row.app_package || '',
+      app_activity: row.app_activity || '',
     }
     stepText.value = (row.steps || []).map(s => typeof s === 'string' ? s : (s.text || '')).join('\n')
   } else {
-    editorForm.value = { id: null, name: '', app_env_id: null, device_serial: '' }
+    editorForm.value = {
+      id: null, name: '',
+      device_serial: serial.value,  // 新建时默认工作台当前设备
+      app_package: '', app_activity: '',
+    }
     stepText.value = ''
   }
   editorDlg.value = true
@@ -550,10 +533,9 @@ async function saveCase() {
     module: 'APP',
     steps,
     driver_type: 'app',
-    app_env_id: editorForm.value.app_env_id,
-    // 未绑环境时（旧字段兼容）缺省取工作台当前 Android 设备；绑了环境则仅作为临时覆盖
-    device_serial: editorForm.value.device_serial
-      || (!editorForm.value.app_env_id && platform.value === 'android' ? serial.value : ''),
+    device_serial: editorForm.value.device_serial || '',
+    app_package: editorForm.value.app_package,
+    app_activity: editorForm.value.app_activity,
   }
   try {
     if (editorForm.value.id) {
@@ -651,7 +633,7 @@ async function stopRun() {
 }
 
 onMounted(async () => {
-  await Promise.all([loadDevices(), loadCases(), loadEnvs()])
+  await Promise.all([loadDevices(), loadCases()])
   if (online.value) {
     startScreen()
     if (interactive.value) loadPackages()
@@ -667,7 +649,7 @@ onBeforeUnmount(() => {
 .wb { display: flex; flex-direction: column; height: 100%; }
 .bar { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
 .sec-title { font-weight: 600; }
-.dim { color: #909399; font-size: 12px; }
+.dim { color: var(--app-text-dim); font-size: 12px; }
 .tip { margin-left: 8px; font-weight: 400; }
 .body { flex: 1; overflow: auto; }
 .card { margin-bottom: 12px; }

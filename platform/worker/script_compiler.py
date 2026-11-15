@@ -791,3 +791,89 @@ def patch_script_api_scenarios(
         return None
 
     return patched
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# APP 脚本编译（双平台统一：同一份脚本可在 Android / iOS 上运行）
+# ─────────────────────────────────────────────────────────────────────────────
+
+_APP_SCRIPT_HEADER = '''\
+import os
+import sys
+import json
+
+# APP 脚本依赖 vision-ui-autotest 仓库根目录（core_app 执行内核）
+_REPO_ROOT = os.environ.get("VUA_REPO_ROOT", "")
+if _REPO_ROOT and _REPO_ROOT not in sys.path:
+    sys.path.insert(0, _REPO_ROOT)
+
+from core_app.app_runner import run_app_case
+
+
+def emit(kind, payload):
+    print(json.dumps({"kind": kind, "payload": payload}, ensure_ascii=False), flush=True)
+'''
+
+_APP_SCRIPT_FOOTER = '''\
+
+if __name__ == "__main__":
+    result = run_app_case(CASE, emit=emit, env_override=ENV)
+    sys.exit(0 if result.get("status") == "passed" else 1)
+'''
+
+
+def compile_to_app_script(case: dict) -> Optional[str]:
+    """把 APP 用例编译为独立 Python 脚本（双平台统一，运行时选平台）。
+
+    与 WEB 的 compile_to_playwright 不同：APP 动作集（tap/type/swipe/press_key/
+    assert_visual/launch_app/wait）已由 core_app 引擎执行，脚本无需翻译成具体框架
+    代码——直接内嵌用例步骤 + 环境即可，保证「同一份脚本在 Android/iOS 通用」。
+
+    平台/设备/被测 App 由环境变量注入（不硬编码）：
+      APP_PLATFORM  android|ios        （默认 android）
+      APP_DEVICE_ID  serial / udid
+      APP_APP_ID     package / bundle_id
+      APP_ACTIVITY   Android 启动 Activity（可选）
+      VUA_REPO_ROOT  仓库根目录（core_app 可 import）
+
+    Returns:
+        完整可执行的 Python 脚本字符串；用例无步骤时返回 None。
+    """
+    steps = case.get("steps") or []
+    if not steps:
+        return None
+
+    name = case.get("name", "未命名用例")
+    module = case.get("module", "")
+    header_comment = f"# 用例: {name}"
+    if module:
+        header_comment += f" / 模块: {module}"
+    header_comment += "\n# APP 引擎脚本（双平台统一，平台由 APP_PLATFORM 环境变量选择）"
+
+    case_payload = {
+        "id": case.get("id"),
+        "name": name,
+        "steps": steps,
+        "driver_type": "app",
+    }
+    body = (
+        f'CASE = {json.dumps(case_payload, ensure_ascii=False, indent=4)}\n\n'
+        'ENV = {\n'
+        '    "name": "脚本环境",\n'
+        '    "platform": os.environ.get("APP_PLATFORM", "android").lower(),\n'
+        '    "device_id": os.environ.get("APP_DEVICE_ID", ""),\n'
+        '    "app_id": os.environ.get("APP_APP_ID", ""),\n'
+        '    "app_activity": os.environ.get("APP_ACTIVITY", ""),\n'
+        '}\n'
+    )
+
+    script = f"{header_comment}\n{_APP_SCRIPT_HEADER}\n{body}\n{_APP_SCRIPT_FOOTER}"
+
+    try:
+        compile(script, "<generated-app>", "exec")
+    except SyntaxError as e:
+        import logging
+        logging.warning("APP 脚本编译语法错误，丢弃：%s", e)
+        return None
+
+    return script

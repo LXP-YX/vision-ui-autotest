@@ -37,6 +37,11 @@ config.yaml
 
 # 环境变量文件
 .env
+.env.*
+
+# 主密钥文件（API Key 加解密用，绝不入库）
+secrets/
+*.key
 
 # IDE / 编辑器
 .idea/

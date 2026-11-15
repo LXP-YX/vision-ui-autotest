@@ -1,14 +1,14 @@
 """App 用例执行编排：把一条 APP 用例的中文步骤跑起来。
 
 对标 platform/worker/runner.py 的自然语言执行路径，差异：
-- 引擎为 core_app（DeviceDriver 抽象：android=ADB / ios=Appium），无 Playwright/CDP；
+- 引擎为 core_app（DeviceDriver 抽象，统一 Appium 实现：Android=UiAutomator2 /
+  iOS=XCUITest，同一份用例可跨平台复用），无 Playwright/CDP；
 - 投屏保活用 driver.screenshot() 周期截图（与平台无关），非 CDP startScreencast；
 - 步骤解析走 core_app.planner（App 动作集），LLM 不可用回退规则式；
 - 事件协议与 WEB 端一致（step/frame/log/heal/done）。
 
-执行前先解析 APP 测试环境（app_env 表：平台+设备+被测 App），
-环境决定驱动实现；旧用例（未绑环境、仅有 device_serial/app_package 字段）
-按 android 兼容构造临时环境。
+执行目标直接取自用例字段（device_serial + app_package/app_activity）；
+编译产物等独立脚本可通过 env_override 直接传入执行目标，无需连平台 DB。
 
 由 run_manager / execution_manager 按 driver_type=='app' 分流调用：
 run_app_case(case, emit, ...)。
@@ -54,46 +54,25 @@ def _step_locator_hint(raw) -> dict | None:
     return None
 
 
-# ------------------------- APP 测试环境解析 -------------------------
+# ------------------------- APP 执行目标解析 -------------------------
 
 def _resolve_app_env(case: dict) -> tuple[Optional[dict], str]:
-    """解析 APP 测试环境。返回 (env, "") 或 (None, 错误信息)。
+    """从用例字段解析执行目标（设备 + 被测 App）。返回 (env, "") 或 (None, 错误信息)。
 
-    优先级：case.app_env_id 绑定的 app_env 环境 > 旧字段兼容
-    （未绑环境的存量用例：device_serial + app_package/app_activity 构造 android 临时环境）。
-    case.device_serial 非空时覆盖环境的 device_id（临时手动指定设备）。
+    APP 测试环境管理已移除（测试环境管理仅对 WEB 开放），执行目标直接取自用例：
+    device_serial（执行设备）+ app_package/app_activity（被测 App）。
+    env_override 传入时由 run_app_case 跳过本函数，独立脚本无需平台 DB。
     """
-    env_id = case.get("app_env_id")
-    if env_id:
-        try:
-            _backend = ROOT / "platform" / "backend"
-            if str(_backend) not in sys.path:
-                sys.path.insert(0, str(_backend))
-            from db import AppEnv, SessionLocal  # type: ignore
-            with SessionLocal() as s:
-                row = s.get(AppEnv, int(env_id))
-                if row:
-                    env = row.to_dict()
-                    # 临时手动指定设备优先于环境里的 device_id
-                    if case.get("device_serial"):
-                        env["device_id"] = case["device_serial"]
-                    return env, ""
-        except Exception as e:  # noqa: BLE001
-            return None, f"读取 APP 测试环境失败（app_env_id={env_id}）：{e}"
-        return None, f"绑定的 APP 测试环境不存在（app_env_id={env_id}，可能已被删除）"
-
-    # 旧字段兼容：未绑环境的存量 android 用例
     serial = case.get("device_serial") or ""
-    if serial:
-        return {
-            "id": None,
-            "name": "临时设备（旧字段兼容）",
-            "platform": "android",
-            "device_id": serial,
-            "app_id": case.get("app_package", ""),
-            "app_activity": case.get("app_activity", ""),
-        }, ""
-    return None, "用例未绑定 APP 测试环境（请在 APP 工作台选择环境），也未指定 device_serial"
+    if not serial:
+        return None, "用例未指定执行设备（device_serial），请在 APP 工作台选择设备后保存用例"
+    return {
+        "name": "用例设备",
+        "platform": "android",
+        "device_id": serial,
+        "app_id": case.get("app_package", ""),
+        "app_activity": case.get("app_activity", ""),
+    }, ""
 
 
 # ------------------------- 投屏 -------------------------
@@ -141,9 +120,9 @@ def _keepalive_loop(driver: DeviceDriver, emit: EventCb, stop: threading.Event,
 # ------------------------- 动作执行 -------------------------
 
 def _do_tap(driver: DeviceDriver, target: str, emit: EventCb,
-            hint: dict | None = None, env_id: Optional[int] = None) -> str:
+            hint: dict | None = None) -> str:
     from core_app import self_healing
-    hit = self_healing.find_element(driver, target, locator_hint=hint, env_id=env_id)
+    hit = self_healing.find_element(driver, target, locator_hint=hint)
     if not hit:
         raise AssertionError(f"未找到元素「{target}」（Store/语义/VLM 均失败，疑为功能缺陷）")
     strat = hit["strategy"]
@@ -159,13 +138,49 @@ def _do_tap(driver: DeviceDriver, target: str, emit: EventCb,
     return f"已点击「{target}」（策略 {strat}，坐标 {cx},{cy}）"
 
 
-def _do_type(driver: DeviceDriver, target: str, text: str, emit: EventCb,
-             env_id: Optional[int] = None) -> str:
+def _is_editable_node(n) -> bool:
+    """控件树节点是否为可输入控件（Android=EditText；iOS=TextField/SecureTextField/SearchField/TextView）。"""
+    cls = (n.cls or "")
+    return cls in ("android.widget.EditText", "XCUIElementTypeTextField",
+                   "XCUIElementTypeSecureTextField", "XCUIElementTypeSearchField",
+                   "XCUIElementTypeTextView")
+
+
+def _find_input(driver: DeviceDriver, target: str):
+    """定位输入框：先等可输入控件出现（状态等待，页面切换后输入框渲染较慢），
+    再走三级定位，并要求命中可输入控件——避免把同名标题/入口当输入框。"""
+    import time as _t
     from core_app import self_healing
-    hit = self_healing.find_element(driver, target, env_id=env_id)
+    deadline = _t.monotonic() + _INPUT_WAIT_S
+    while _t.monotonic() < deadline:
+        try:
+            if any(_is_editable_node(n) for n in driver.ui_tree()):
+                break
+        except Exception:  # noqa: BLE001
+            pass
+        _t.sleep(0.5)
+    hit = self_healing.find_element(driver, target)
+    if hit:
+        try:
+            nodes = driver.ui_tree()
+        except Exception:  # noqa: BLE001
+            nodes = []
+        editables = [n for n in nodes if _is_editable_node(n) and n.area > 0]
+        if editables:
+            same = [n for n in editables if tuple(n.bounds) == tuple(hit["bounds"])]
+            pick = (same or editables)[0]
+            cx, cy = pick.center
+            return {**hit, "by": "type", "value": pick.cls,
+                    "bounds": list(pick.bounds), "center": [cx, cy]}
+    return hit
+
+
+def _do_type(driver: DeviceDriver, target: str, text: str, emit: EventCb) -> str:
+    from core_app import self_healing
+    hit = _find_input(driver, target)
     if not hit:
         raise AssertionError(f"未找到输入框「{target}」（三级定位均失败）")
-    driver.type_into(hit, text)  # iOS 走元素级输入（支持 Unicode），Android 走点击聚焦+输入
+    driver.type_into(hit, text)  # 双平台均为元素级 send_keys（原生 Unicode）
     return f"已在「{target}」输入「{text}」"
 
 
@@ -229,16 +244,16 @@ def _do_wait(seconds: float, driver: DeviceDriver, emit: EventCb) -> str:
 
 
 def _dispatch(action: str, args: dict, driver: DeviceDriver, emit: EventCb,
-              env: dict, env_id: Optional[int], hint: dict | None = None) -> str | None:
+              env: dict, hint: dict | None = None) -> str | None:
     if action == "tap_element":
         target = args.get("target", "")
         if target:
-            return _do_tap(driver, target, emit, hint=hint, env_id=env_id)
+            return _do_tap(driver, target, emit, hint=hint)
     elif action == "type_text":
         target = args.get("target", "")
         text = args.get("text", "")
         if target and text is not None:
-            return _do_type(driver, target, text, emit, env_id=env_id)
+            return _do_type(driver, target, text, emit)
     elif action == "swipe":
         if args.get("direction"):
             return _do_swipe(driver, args["direction"])
@@ -295,8 +310,7 @@ def _plan_step(step: str, platform: str) -> dict | None:
 
 
 def _interpret_step(step: str, driver: DeviceDriver, emit: EventCb,
-                    env: dict, env_id: Optional[int],
-                    hint: dict | None = None) -> str:
+                    env: dict, hint: dict | None = None) -> str:
     """解析并执行一条中文步骤。"""
     plan = _plan_step(step, driver.platform)
     if plan:
@@ -305,7 +319,7 @@ def _interpret_step(step: str, driver: DeviceDriver, emit: EventCb,
             args = {**args, "locator_hint": hint}
         if action not in ("tap_element",):
             emit("log", {"msg": f"[AI] 解析为 {action}{args or ''}"})
-        result = _dispatch(action, args, driver, emit, env, env_id, hint=hint)
+        result = _dispatch(action, args, driver, emit, env, hint=hint)
         if result is not None:
             return result
     emit("log", {"msg": f"[跳过] 未识别步骤：{step.strip()}"})
@@ -315,17 +329,23 @@ def _interpret_step(step: str, driver: DeviceDriver, emit: EventCb,
 # ------------------------- 主入口 -------------------------
 
 def run_app_case(case: dict, emit: EventCb = _noop, run_id: int | None = None,
-                 cancel_event=None) -> dict:
-    """执行一条 APP 用例：DeviceDriver 引擎 + 实时投屏 + 自然语言三级定位。
+                 cancel_event=None,
+                 env_override: dict | None = None) -> dict:
+    """执行一条 APP 用例：Appium 引擎（双平台同框架）+ 实时投屏 + 自然语言三级定位。
 
     Args:
-        case: {id,name,steps,driver_type,app_env_id,device_serial,app_package,app_activity}
+        case: {id,name,steps,driver_type,device_serial,app_package,app_activity}
         emit: 事件回调（step / frame / log / heal / done）
         cancel_event: threading.Event，set 时中止
+        env_override: 直接给出执行目标 dict（平台/设备/App），跳过用例字段解析；
+                      供独立脚本使用（编译产物无需连平台 DB 即可跨平台运行）
     Returns:
         {status, step_results, screenshots, error}
     """
-    env, err = _resolve_app_env(case)
+    if env_override:
+        env, err = env_override, ""
+    else:
+        env, err = _resolve_app_env(case)
     if not env:
         emit("done", {"status": "error", "error": err})
         return {"status": "error", "step_results": [], "screenshots": [], "error": err}
@@ -333,11 +353,9 @@ def run_app_case(case: dict, emit: EventCb = _noop, run_id: int | None = None,
     platform = (env.get("platform") or "android").lower()
     device_id = env.get("device_id") or ""
     if not device_id:
-        msg = f"APP 测试环境「{env.get('name')}」未配置设备（device_id 为空）"
+        msg = "用例未配置执行设备（device_serial 为空）"
         emit("done", {"status": "error", "error": msg})
         return {"status": "error", "step_results": [], "screenshots": [], "error": msg}
-
-    env_id = env.get("id")
 
     try:
         driver = create_driver(platform, device_id, env.get("app_id", ""),
@@ -348,7 +366,7 @@ def run_app_case(case: dict, emit: EventCb = _noop, run_id: int | None = None,
         return {"status": "error", "step_results": [], "screenshots": [], "error": str(e)}
 
     try:
-        driver.connect()  # iOS：创建 Appium session（较慢）；Android：无操作
+        driver.connect()  # 双平台：创建 Appium session（首次较慢）
         status_info = driver.status()
     except Exception as e:  # noqa: BLE001
         driver.close()
@@ -358,11 +376,12 @@ def run_app_case(case: dict, emit: EventCb = _noop, run_id: int | None = None,
     if not status_info["online"]:
         driver.close()
         msg = f"设备 {device_id} 离线（平台 {platform}），请确认设备已连接" + (
-            "且 Appium Server 已启动" if platform == "ios" else "且 adb 已连接")
+            "且 Appium Server 已启动、appium-uiautomator2-driver 已安装" if platform == "android"
+            else "且 Appium Server 已启动、WebDriverAgent 已就绪")
         emit("done", {"status": "error", "error": msg})
         return {"status": "error", "step_results": [], "screenshots": [], "error": msg}
 
-    emit("log", {"msg": f"环境「{env.get('name')}」：{platform} 设备 {device_id} 在线"
+    emit("log", {"msg": f"执行目标：{platform} 设备 {device_id} 在线"
                         + (f"（{status_info['width']}x{status_info['height']}）"
                            if status_info["width"] else "")})
 
@@ -391,7 +410,7 @@ def run_app_case(case: dict, emit: EventCb = _noop, run_id: int | None = None,
             hint = _step_locator_hint(step)
             emit("step", {"index": idx, "text": text, "state": "running"})
             try:
-                detail = _interpret_step(text, driver, emit, env, env_id, hint=hint)
+                detail = _interpret_step(text, driver, emit, env, hint=hint)
                 step_results.append({"index": idx, "text": text, "ok": True, "detail": detail})
                 emit("step", {"index": idx, "text": text, "state": "passed", "detail": detail})
                 _push_frame(driver, emit)

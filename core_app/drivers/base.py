@@ -1,15 +1,15 @@
 """设备驱动抽象层：平台无关的统一接口 + 统一 UI 节点模型。
 
-DeviceDriver 是 Android（ADB）与 iOS（Appium/XCUITest）驱动的共同契约，
+DeviceDriver 是 Android（Appium/UiAutomator2）与 iOS（Appium/XCUITest）驱动的共同契约，
 下游（app_runner / self_healing / vision）只面向本模块，不感知具体平台。
 平台差异全部收敛在各驱动实现内：
 
 - 坐标系：screenshot() 返回的 PNG 与 tap/swipe 的坐标均为「屏幕像素坐标」，
   两平台同义（iOS 驱动内部负责像素↔逻辑点换算）；
 - 按键：press_key 用逻辑键名（home/back/enter/...），各实现自行映射
-  （Android→keycode，iOS→WDA 按键），无对应键的抛清晰错误；
-- 输入：input_text 向当前聚焦输入框输入（Android 仅 ASCII，iOS 原生 Unicode）；
-  type_into 按定位结果直接输入（iOS 用元素级 send_keys，绕开聚焦语义）；
+  （Android→keycode，iOS→WDA 按键/边缘手势），无对应键的抛清晰错误；
+- 输入：input_text 向当前聚焦输入框输入；type_into 按定位结果元素级输入，
+  双平台均支持 Unicode；
 - App 标识：start_app 的 app_id 为 Android package / iOS bundle_id。
 """
 
@@ -114,12 +114,12 @@ class DeviceDriver(ABC):
 
     @abstractmethod
     def input_text(self, text: str) -> None:
-        """向当前聚焦输入框输入文本（Android 仅 ASCII；iOS 原生 Unicode）。"""
+        """向当前聚焦输入框输入文本（双平台均支持 Unicode）。"""
 
     def type_into(self, hit: dict, text: str) -> None:
         """按定位结果输入：默认实现为点击中心聚焦后 input_text。
 
-        iOS 覆写为「按 hit 的 {by,value} 找到元素 → 元素级 send_keys」，
+        Appium 驱动覆写为「按 hit 的 {by,value} 找到元素 → 元素级 send_keys」，
         不依赖焦点语义且支持任意 Unicode。
         """
         cx, cy = hit["center"]

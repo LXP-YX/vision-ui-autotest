@@ -2,8 +2,8 @@
 """平台一键启动器：一条命令同时拉起前后端。
 
 用法：
-    python3 start.py            # 开发模式（默认）
-    python3 start.py --prod      # 生产模式
+    python3 main.py            # 开发模式（默认）
+    python3 main.py --prod      # 生产模式
 
 依赖：pip install -r requirements.txt（PEP 668 管控的环境加 --break-system-packages）
 
@@ -17,7 +17,8 @@
 - 再 uvicorn main:app（80）同一进程托管 dist + API + WebSocket
 - 浏览器打开 http://127.0.0.1（80 为特权端口，需 sudo 绑定）
 
-两模式均：日志加 [后端]/[前端] 前缀；Ctrl+C 一并关闭（进程组整组杀）。
+两模式均：启动前先清理本项目残留的前后端进程；日志加 [后端]/[前端] 前缀；
+Ctrl+C 一并关闭（进程组整组杀）。
 """
 
 from __future__ import annotations
@@ -34,6 +35,10 @@ import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
+
+sys.path.insert(0, str(ROOT))
+from core import crypto  # noqa: E402  (仅读 KEY_ENV 常量，不触发加解密)
+
 PLATFORM_DIR = ROOT / "platform"
 BACKEND_DIR = PLATFORM_DIR / "backend"
 FRONTEND_DIR = PLATFORM_DIR / "frontend"
@@ -43,9 +48,12 @@ BACKEND_PORT = 8077      # 开发模式后端端口
 FRONTEND_PORT = 5177     # 开发模式前端端口
 PROD_PORT = 80           # 生产模式单进程端口（80 为特权端口，需 sudo 绑定）
 
+SECRET_FILE = ROOT / "secrets" / "master.key"   # 主密钥文件（已 gitignore）
+
 # ANSI 颜色（前缀着色，便于区分两段日志）
 CYAN = "\033[36m"
 MAGENTA = "\033[35m"
+RED = "\033[31m"
 RESET = "\033[0m"
 
 _procs: list[subprocess.Popen] = []
@@ -68,6 +76,94 @@ def _preflight() -> bool:
         print(f"    cd {FRONTEND_DIR} && npm install")
         return False
     return True
+
+
+def _port_pids(port: int) -> set[int]:
+    """返回监听指定端口的进程 pid 集合（无 lsof 时返回空集）。"""
+    if shutil.which("lsof") is None:
+        return set()
+    out = subprocess.run(
+        ["lsof", "-nP", "-ti", f"tcp:{port}", "-sTCP:LISTEN"],
+        capture_output=True, text=True, check=False,
+    ).stdout
+    return {int(x) for x in out.split() if x.isdigit()}
+
+
+def _cmdline(pid: int) -> str:
+    """读进程完整命令行（读不到返回空串，例如权限不足）。"""
+    out = subprocess.run(
+        ["ps", "-p", str(pid), "-o", "command="],
+        capture_output=True, text=True, check=False,
+    ).stdout
+    return out.strip()
+
+
+def _kill_pids(pids: set[int], label: str) -> None:
+    """先 SIGTERM，5 秒内未退出再 SIGKILL。"""
+    for pid in pids:
+        print(f"{RED}[清理]{RESET} 终止{label} pid={pid}")
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except (ProcessLookupError, PermissionError):
+            continue
+    for pid in pids:
+        for _ in range(50):
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                break
+            time.sleep(0.1)
+        else:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                pass
+
+
+def _cleanup_stale(ports: tuple[int, ...]) -> bool:
+    """启动前清理端口占用：凡监听目标端口的进程一律终止，并打印提示。
+
+    终止后复查端口，仍有进程监听则返回 False 由调用方中止启动
+    （多为权限不足，需 sudo 或手动处理）。
+    """
+    killed = False
+    for port in ports:
+        pids = {p for p in _port_pids(port) if p != os.getpid()}
+        if not pids:
+            continue
+        for pid in pids:
+            print(f"{RED}[清理]{RESET} 端口 {port} 已被占用，终止进程 pid={pid}: "
+                  f"{_cmdline(pid) or '未知进程'}")
+        _kill_pids(pids, f"端口 {port} 占用进程")
+        killed = True
+        if _port_pids(port) - {os.getpid()}:
+            print(f"{RED}[清理]{RESET} 端口 {port} 仍被占用（可能权限不足），请手动处理")
+            return False
+        print(f"{RED}[清理]{RESET} 端口 {port} 已释放")
+    if not killed:
+        print(f"{RED}[清理]{RESET} 目标端口 {', '.join(str(p) for p in ports)} 均空闲")
+    return True
+
+
+def _ensure_secret_key() -> bool:
+    """确保主密钥 AUTOTEST_SECRET_KEY 已注入（API Key 加解密依赖）。
+
+    优先级：已存在的环境变量 > 项目根 secrets/master.key 密钥文件。
+    都找不到时打印指引并返回 False（不静默生成，避免换机后无法解密旧密文）。
+    密钥文件与 .env 均已 gitignore，主密钥不入库、不进代码。
+    """
+    if os.environ.get(crypto.KEY_ENV):
+        return True
+    if SECRET_FILE.exists():
+        key = SECRET_FILE.read_text(encoding="utf-8").strip()
+        if key:
+            os.environ[crypto.KEY_ENV] = key
+            return True
+    print(f"{RED}[启动]{RESET} 未找到主密钥，请任选其一：")
+    print(f"  1) 生成密钥文件：python3 -c \"import secrets;open('{SECRET_FILE}','w')"
+          f".write(secrets.token_urlsafe(48))\" && chmod 600 {SECRET_FILE}")
+    print(f"  2) 注入环境变量：export {crypto.KEY_ENV}=<你的主密钥>")
+    return False
 
 
 def _spawn(cmd: list[str], cwd: Path) -> subprocess.Popen:
@@ -149,6 +245,10 @@ def run_dev() -> int:
     """开发模式：后端 uvicorn + 前端 vite（热更新）。"""
     if not _preflight():
         return 1
+    if not _cleanup_stale((BACKEND_PORT, FRONTEND_PORT)):
+        return 1
+    if not _ensure_secret_key():
+        return 1
 
     backend = _spawn(
         [sys.executable, "-m", "uvicorn", "main:app",
@@ -179,6 +279,10 @@ def run_dev() -> int:
 def run_prod() -> int:
     """生产模式：先构建前端，再由后端单进程单端口托管 dist + API + WS。"""
     if not _preflight():
+        return 1
+    if not _cleanup_stale((PROD_PORT,)):
+        return 1
+    if not _ensure_secret_key():
         return 1
 
     # ① 构建前端（阻塞直到完成）

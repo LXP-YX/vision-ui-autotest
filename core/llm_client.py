@@ -14,6 +14,8 @@ import ssl
 import urllib.request
 from typing import Any, Optional
 
+import certifi
+
 
 class LLMError(RuntimeError):
     """大模型调用异常。"""
@@ -32,9 +34,10 @@ class LLMClient:
         self.timeout = int(g("timeout", 60) or 60)
         self.vision_timeout = int(g("vision_timeout", max(120, self.timeout)) or 120)
         verify = g("verify_ssl", True)
-        self._ctx: Optional[ssl.SSLContext] = None
+        # verify_ssl=True 时显式使用 certifi 的 CA 包：Python 3.14 的默认信任库路径
+        # 在部分环境下为空，会导致证书链找不到根证书而报 self-signed certificate in chain。
+        self._ctx: Optional[ssl.SSLContext] = ssl.create_default_context(cafile=certifi.where())
         if verify is False:
-            self._ctx = ssl.create_default_context()
             self._ctx.check_hostname = False
             self._ctx.verify_mode = ssl.CERT_NONE
 
