@@ -1,7 +1,7 @@
 <template>
   <div>
     <div class="bar">
-      <span class="sec-title">测试环境管理</span>
+      <span class="sec-title">web 环境管理</span>
       <span>
         <el-button type="primary" size="small" @click="openEdit()">新建环境</el-button>
         <el-button type="danger" size="small" :disabled="!selection.length"
@@ -9,7 +9,7 @@
       </span>
     </div>
     <el-alert type="info" :closable="false" show-icon class="mb"
-      title="维护多套测试环境（站点 URL / 账号 / 密码），全部落库。站点 URL 填打开即用的地址（一般填登录页 URL），登录、录制、执行都直接打开它。下拉/按钮选中的默认环境供登录、录制、执行使用。" />
+      title="维护多套 web 环境（环境名 / 环境URL），全部落库。环境URL 填打开即用的地址（一般填登录页 URL），默认环境的 URL 是 web 录制与用例执行的起点。" />
 
     <div class="picker mb">
       <span>当前默认环境：</span>
@@ -27,8 +27,7 @@
         <template #default="{ row }">{{ indexOf(row) }}</template>
       </el-table-column>
       <el-table-column prop="name" label="环境名" min-width="110" />
-      <el-table-column prop="base_url" label="站点 URL" min-width="200" show-overflow-tooltip />
-      <el-table-column prop="username" label="账号" width="120" />
+      <el-table-column prop="base_url" label="环境URL" min-width="200" show-overflow-tooltip />
       <el-table-column label="默认" width="70">
         <template #default="{ row }">
           <el-tag v-if="row.is_default" type="success" size="small">默认</el-tag>
@@ -48,12 +47,7 @@
     <el-dialog v-model="editVisible" :title="form.id ? `编辑环境 #${form.id}` : '新建环境'" width="520px">
       <el-form :model="form" label-width="90px">
         <el-form-item label="环境名"><el-input v-model="form.name" placeholder="如 测试环境 / 预发环境" /></el-form-item>
-        <el-form-item label="站点 URL"><el-input v-model="form.base_url" placeholder="https://your-site.example.com/login" /></el-form-item>
-        <el-form-item label="账号"><el-input v-model="form.username" placeholder="登录用户名" /></el-form-item>
-        <el-form-item label="密码">
-          <el-input v-model="form.password" type="password" show-password
-            :placeholder="form.id ? '留空则不修改' : '登录密码'" />
-        </el-form-item>
+        <el-form-item label="环境URL"><el-input v-model="form.base_url" placeholder="https://your-site.example.com/login" /></el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="editVisible = false">取消</el-button>
@@ -75,7 +69,7 @@ const { items: envs, setItems: setEnvs, onSortChange, indexOf } = useIdSort()
 const { selection, onSelectionChange, batchDelete } = useMultiSelect()
 const defaultId = ref(null)
 const editVisible = ref(false)
-const form = reactive({ id: null, name: '', base_url: '', username: '', password: '' })
+const form = reactive({ id: null, name: '', base_url: '' })
 
 async function load() {
   const { data } = await axios.get('/api/test-envs')
@@ -86,18 +80,16 @@ async function load() {
 
 function openEdit(row) {
   if (row) {
-    Object.assign(form, { id: row.id, name: row.name, base_url: row.base_url,
-      username: row.username, password: '' })
+    Object.assign(form, { id: row.id, name: row.name, base_url: row.base_url })
   } else {
-    Object.assign(form, { id: null, name: '', base_url: '', username: '', password: '' })
+    Object.assign(form, { id: null, name: '', base_url: '' })
   }
   editVisible.value = true
 }
 
 async function save() {
-  if (!form.name || !form.base_url) { ElMessage.warning('请填写环境名和站点 URL'); return }
-  const payload = { name: form.name, base_url: form.base_url,
-    username: form.username, password: form.password }
+  if (!form.name || !form.base_url) { ElMessage.warning('请填写环境名和环境URL'); return }
+  const payload = { name: form.name, base_url: form.base_url }
   if (form.id) await axios.put(`/api/test-envs/${form.id}`, payload)
   else await axios.post('/api/test-envs', payload)
   editVisible.value = false
@@ -123,7 +115,7 @@ async function onPickDefault(id) {
 
 function onBatchDelete() {
   batchDelete({
-    label: '测试环境',
+    label: 'web 环境',
     deleteOne: r => axios.delete(`/api/test-envs/${r.id}`),
     onDone: load,
   })

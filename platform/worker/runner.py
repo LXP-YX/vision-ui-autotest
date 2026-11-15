@@ -678,15 +678,13 @@ def _run_playwright_script(
             env["PW_PASSWORD"] = creds.get("password") or ""
         except Exception:
             pass
-        # 覆盖：默认测试环境（DB）优先
+        # 覆盖：默认 web 环境（DB）的 URL 优先（环境不再含账号密码）
         try:
             from db import SessionLocal, TestEnv  # type: ignore
             with SessionLocal() as s:
                 env_row = s.query(TestEnv).filter(TestEnv.is_default == True).first()  # noqa: E712
                 if env_row:
                     env["PW_BASE_URL"] = (env_row.base_url or "").rstrip("/")
-                    env["PW_USERNAME"] = env_row.username or ""
-                    env["PW_PASSWORD"] = env_row.password or ""
         except Exception:
             pass
 

@@ -238,10 +238,12 @@ def run():
         emit("step", index=0, text="登录系统", state="running")
         time.sleep(1)
         page.goto(BASE_URL, wait_until="domcontentloaded")
-        page.wait_for_selector("input[placeholder*='用户名'], input[placeholder*='账号'], input[type='text']", timeout=15000)
-        page.locator("input[placeholder*='用户名'], input[placeholder*='账号'], input[type='text']").first.fill(USERNAME)
-        page.locator("input[placeholder*='密码'], input[type='password']").first.fill(PASSWORD)
-        page.locator("button:has-text('登录'), button:has-text('登 录'), button[type='submit']").first.click()
+        if USERNAME and PASSWORD:
+            # 有账号密码才走填表登录；否则依赖站点会话/免登，直接等就绪判据
+            page.wait_for_selector("input[placeholder*='用户名'], input[placeholder*='账号'], input[type='text']", timeout=15000)
+            page.locator("input[placeholder*='用户名'], input[placeholder*='账号'], input[type='text']").first.fill(USERNAME)
+            page.locator("input[placeholder*='密码'], input[type='password']").first.fill(PASSWORD)
+            page.locator("button:has-text('登录'), button:has-text('登 录'), button[type='submit']").first.click()
         page.wait_for_selector(LOGIN_READY_SEL, timeout=15000)
         expect(page.locator(LOGIN_READY_SEL).first).to_be_visible()
         try:
@@ -464,10 +466,11 @@ def _trace_entry_to_code(entry: dict, idx: int) -> str:
     if action == "login":
         return (
             "        page.goto(BASE_URL, wait_until=\"domcontentloaded\")\n"
-            "        page.wait_for_selector(\"input[placeholder*='用户名'], input[placeholder*='账号'], input[type='text']\", timeout=15000)\n"
-            "        page.locator(\"input[placeholder*='用户名'], input[placeholder*='账号'], input[type='text']\").first.fill(USERNAME)\n"
-            "        page.locator(\"input[placeholder*='密码'], input[type='password']\").first.fill(PASSWORD)\n"
-            "        page.locator(\"button:has-text('登录'), button:has-text('登 录'), button[type='submit']\").first.click()\n"
+            "        if USERNAME and PASSWORD:\n"
+            "            page.wait_for_selector(\"input[placeholder*='用户名'], input[placeholder*='账号'], input[type='text']\", timeout=15000)\n"
+            "            page.locator(\"input[placeholder*='用户名'], input[placeholder*='账号'], input[type='text']\").first.fill(USERNAME)\n"
+            "            page.locator(\"input[placeholder*='密码'], input[type='password']\").first.fill(PASSWORD)\n"
+            "            page.locator(\"button:has-text('登录'), button:has-text('登 录'), button[type='submit']\").first.click()\n"
             "        page.wait_for_selector(LOGIN_READY_SEL, timeout=15000)\n"
             "        expect(page.locator(LOGIN_READY_SEL).first).to_be_visible()\n"
             "        try:\n"

@@ -177,18 +177,16 @@ CREATE TABLE IF NOT EXISTS `api_scenario_run` (
   KEY `idx_scenario_id` (`scenario_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='接口场景运行记录';
 
--- 测试环境表（多套测试数据，页面维护，全落库）
+-- web 环境表（多套环境，页面维护，全落库；只维护 环境名 + 环境URL）
 CREATE TABLE IF NOT EXISTS `test_env` (
   `id`         INT NOT NULL AUTO_INCREMENT,
   `name`       VARCHAR(100) NOT NULL COMMENT '环境名',
-  `base_url`   VARCHAR(300) DEFAULT '' COMMENT '测试站点 URL（打开即用，一般填登录页）',
-  `username`   VARCHAR(100) DEFAULT '' COMMENT '测试账号',
-  `password`   VARCHAR(200) DEFAULT '' COMMENT '测试密码',
+  `base_url`   VARCHAR(300) DEFAULT '' COMMENT '环境URL（打开即用，一般填登录页）',
   `is_default` TINYINT(1) DEFAULT 0 COMMENT '是否默认环境',
   `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP,
   `updated_at` DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='测试环境（多套测试数据）';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='web 环境（多套）';
 
 -- ============================================================
 -- 用例执行模板：把若干条用例编排成一次批量运行

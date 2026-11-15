@@ -1,7 +1,7 @@
-"""pytest 公共 fixtures：会话级登录复用 + 失败自动截图。
+"""pytest 公共 fixtures：会话级站点上下文复用 + 失败自动截图。
 
 - 会话开始清空 screenshots/；
-- 会话级 context 预登录一次，cookies 跨用例复用；
+- 会话级 context 打开环境 URL 一次（依赖站点会话/免登），cookies 跨用例复用；
 - 每个用例拿到共享登录态的全新 page；
 - 用例失败时自动整页截图到 screenshots/。
 """
@@ -21,7 +21,7 @@ sys.path.insert(0, str(ROOT))
 
 from core import browser as browser_mod  # noqa: E402
 from core import config  # noqa: E402
-from core.login_page import LoginPage  # noqa: E402
+from core.main_page import MainPage, ready_menu_selector  # noqa: E402
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -40,13 +40,11 @@ def _clean_screenshots() -> Iterator[None]:
 
 @pytest.fixture(scope="session")
 def logged_in_context() -> Iterator[BrowserContext]:
-    """会话级登录态上下文，所有用例共享 cookies。"""
+    """会话级站点上下文，所有用例共享 cookies（依赖站点会话/免登，不再填账号密码）。"""
     with browser_mod.launch_context() as (_browser, context):
         page = context.new_page()
-        login = LoginPage(page)
-        login.open()
-        creds = config.get("account")
-        login.login(creds["username"], creds["password"])
+        page.goto(config.get("base_url").rstrip("/"), wait_until="domcontentloaded")
+        MainPage(page).wait_visible(ready_menu_selector(), timeout=15_000)
         page.close()
         yield context
 

@@ -10,11 +10,7 @@
         </el-menu-item>
         <el-menu-item index="/cases">
           <el-icon><List /></el-icon>
-          <span>用例管理</span>
-        </el-menu-item>
-        <el-menu-item index="/app-workbench">
-          <el-icon><Cellphone /></el-icon>
-          <span>APP 工作台</span>
+          <span>web 用例工作台</span>
         </el-menu-item>
         <el-menu-item index="/api-testing">
           <el-icon><Connection /></el-icon>
@@ -22,11 +18,15 @@
         </el-menu-item>
         <el-menu-item v-if="recordEnabled" index="/record">
           <el-icon><VideoCamera /></el-icon>
-          <span>录制用例</span>
+          <span>web 录制用例</span>
         </el-menu-item>
         <el-menu-item index="/test-data">
           <el-icon><Setting /></el-icon>
-          <span>测试环境管理</span>
+          <span>web 环境管理</span>
+        </el-menu-item>
+        <el-menu-item index="/app-workbench">
+          <el-icon><Cellphone /></el-icon>
+          <span>APP 工作台</span>
         </el-menu-item>
         <el-menu-item index="/llm">
           <el-icon><Cpu /></el-icon>

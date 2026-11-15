@@ -589,16 +589,8 @@ def adapt_codegen_script(raw_script: str, case_steps: list[str]) -> Optional[str
         return re.sub(r'"(https?://[^"]+)"', _sub, line)
 
     # 账号密码：替换 fill("账号值") 里的硬编码值
-    # 先收集原始凭据（从第一条 fill 行判断）
+    # web 环境已不含账号密码，凭据只能从录制脚本反推（codegen 把真实密码写进去了）
     _raw_user, _raw_pass = "", ""
-    try:
-        from core import config as _config2
-        creds = _config2.get("account") or {}
-        _raw_user = creds.get("username") or ""
-        _raw_pass = creds.get("password") or ""
-    except Exception:
-        pass
-    # 也从 op_lines 里尝试反推（codegen 把真实密码写进去了）
     for _ol in op_lines:
         _s = _ol.strip()
         if 'fill("' in _s and ('账户' in _s or '用户名' in _s or 'username' in _s.lower()):

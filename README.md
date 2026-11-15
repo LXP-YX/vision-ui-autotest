@@ -9,10 +9,11 @@
 - **自然语言用例**：中文步骤描述（如 `登录系统`、`进入 系统设置 → 用户管理`、`确认页面正常无报错`），AI Planner 解析为可执行动作；LLM 不可用自动回退规则式解析
 - **视觉理解（VLM）**：截图交给多模态大模型做视觉定位与视觉断言；任意 OpenAI 兼容 VLM 端点均可接入
 - **脚本自愈**：三级定位（知识库命中 → 语义定位 → VLM 视觉重定位），成功自动回写知识库；三级全失败判为功能缺陷，不伪造通过
-- **可视化平台**：用例管理、执行记录、测试环境（多套可切换）、大模型配置、自愈知识库、测试计划
+- **可视化平台**：web 用例工作台、执行记录、web 环境管理（多套可切换）、web 录制用例、接口管理、APP 工作台、大模型配置、自愈知识库、测试计划
 - **实时投屏**：无头 Chromium + CDP `Page.startScreencast`，云端无物理屏也能实时观看执行过程
 - **AI 生成用例**：需求描述 / 页面探索 / 操作录制三种方式生成用例草稿（人工审核后生效）
-- **App 自动化（纯 ADB）**：可选的 Android 测试路线，与 Web 端共用平台与大模型配置
+- **App 自动化（双平台统一）**：与 Web 端除大模型配置外相互独立，共用平台；Android（UiAutomator2）/ iOS（XCUITest）同一框架同一用例复用，需 Appium Server
+- **接口测试 + token 全局变量**：纯 HTTP 接口库/场景库；WEB 与 APP 用例均可在自然语言步骤里写 `[接口场景#N] 名称` 嵌入场景执行，登录后 token 存入上下文供 `${token}` 变量替换
 - **外部接口**：`POST /api/execution-templates/{id}/run-sync` 供 CI 同步触发测试计划并返回结果
 
 ## 目录结构
@@ -29,7 +30,7 @@ vision-ui-autotest/
 │   ├── vision.py         VLM 视觉定位 / 视觉断言
 │   ├── self_healing.py   三级定位 + 知识库回写
 │   └── crypto.py         API Key 加密落库（Fernet）
-├── core_app/             App 执行内核（可选，纯 ADB 路线）
+├── core_app/             App 执行内核（可选，Appium 双平台统一）
 ├── platform/
 │   ├── backend/          FastAPI + SQLAlchemy（REST + WebSocket，MySQL/SQLite）
 │   ├── frontend/         Vue3 + Vite4 + Element Plus
@@ -73,7 +74,7 @@ PW_HEADLESS=0 python3 run_login.py    # 临时有头调试
 python3 -m pytest                     # pytest 登录冒烟
 ```
 
-引擎单机模式无需启动平台：`config.yaml` 的 `site` / `account` 段提供站点与账号（平台 DB 可用时优先用平台「测试环境管理」维护的环境）。
+引擎单机模式无需启动平台：`config.yaml` 的 `site.base_url` 提供打开地址（平台 DB 可用时优先用平台「web 环境管理」维护的默认环境 URL）。web 环境不再维护账号密码，登录由站点会话/免登状态承担。
 
 ### B. 启动可视化测试平台
 
@@ -89,7 +90,7 @@ sudo python3 main.py --prod
 
 ## 配置说明
 
-所有可变项集中在 `config.yaml`（模板见 `config.example.yaml`，**该文件已 gitignore，含你的站点地址与账号，请勿提交**）：
+所有可变项集中在 `config.yaml`（模板见 `config.example.yaml`，**该文件已 gitignore，含你的站点地址，请勿提交**）：
 
 ```yaml
 browser:
@@ -99,7 +100,7 @@ api:
   token_storage_key: "token"      # 被测站点登录后 token 在 localStorage 的键名
 site:                             # 单机模式回退用；平台模式下由 DB 提供
   base_url: "https://your-site.example.com/login"   # 打开即用的地址（一般填登录页）
-account:
+account:                          # 可选，遗留配置：web 环境不再自动填账号密码，仅供脚本兜底
   username: "${SITE_USERNAME}"   # 敏感值走环境变量注入
   password: "${SITE_PASSWORD}"
 database:
@@ -164,7 +165,7 @@ python3 main.py
 
 - 列表默认掩码显示（如 `sk-sec****6789`），点小眼睛按需向后端请求该条明文；编辑框留空表示不修改 Key。
 - 主密钥缺失或与密文不匹配时，保存接口返回明确错误，列表降级显示「未录入」而不是接口 500。
-- 被测站点账号密码仅存在平台 `test_env` 表（本地 SQLite / 你的 MySQL），`config.yaml` 已 gitignore。
+- web 环境仅维护环境名 + 环境URL，不再存账号密码；`config.yaml` 的 `account` 段为可选遗留配置，已 gitignore。
 
 ## 安全须知（部署前必读）
 
@@ -199,16 +200,21 @@ echo "$RESP" | jq -e '.success' >/dev/null || { echo "$RESP" | jq '.failed_cases
 - **会话级登录**：每会话登录一次、cookies 复用；登录成功以顶部导航可见为判据
 - **失败自动截图**；数据库现有字段只增不改；用 `@pytest.mark.order(n)` 控制用例顺序
 
-## 用例步骤写法（6 类可执行动作）
+## 用例步骤写法（WEB / APP 通用）
 
-| 动作 | 写法示例 |
-|---|---|
-| login | `登录系统` |
-| navigate | `进入 一级菜单 → 二级菜单` |
-| click_element | `点击 搜索按钮` |
-| assert_visual | `确认列表中展示了数据`（VLM 视觉断言） |
-| check_health | `确认页面正常无报错`（纯 DOM 健康检查） |
-| api_request | `调用接口 GET /api/xxx`（自动带登录 token） |
+WEB 与 APP 用例共用同一套自然语言动作；`api_scenario`（接口场景）在两端写法一致，均在用例步骤里嵌入。
+
+| 动作 | 写法示例 | 适用端 |
+|---|---|---|
+| login | `登录系统` | WEB |
+| navigate | `进入 一级菜单 → 二级菜单` | WEB |
+| click_element | `点击 搜索按钮` | WEB / APP |
+| type_text | `在 用户名 输入框 输入 张三` | WEB / APP |
+| swipe / press_key | `上滑` / `按返回键` | APP |
+| assert_visual | `确认列表中展示了数据`（VLM 视觉断言） | WEB / APP |
+| check_health | `确认页面正常无报错`（纯 DOM 健康检查） | WEB |
+| wait | `等待 3 秒` | WEB / APP |
+| api_scenario | `[接口场景#1] 查询用户并断言`（嵌入接口场景，自动带登录 token） | WEB / APP |
 
 ## License
 

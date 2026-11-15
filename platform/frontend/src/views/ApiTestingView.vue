@@ -40,7 +40,7 @@
       <!-- ============ 全局变量 ============ -->
       <el-tab-pane label="全局变量" name="vars">
         <div class="bar">
-          <span class="sec-title">全局变量模板（按测试环境）</span>
+          <span class="sec-title">全局变量模板（按 web 环境）</span>
           <span>
             <el-input v-model="varQuery" size="small" clearable placeholder="按变量名 / 值 / 模块查询"
                       style="width:240px;margin-right:8px" :prefix-icon="Search" />
@@ -50,7 +50,7 @@
           </span>
         </div>
         <div class="picker mb">
-          <span>测试环境：</span>
+          <span>web 环境：</span>
           <el-select v-model="envId" size="small" style="width:220px" @change="loadVars">
             <el-option v-for="e in envs" :key="e.id" :label="e.name + (e.is_default ? '（默认）' : '')" :value="e.id" />
           </el-select>

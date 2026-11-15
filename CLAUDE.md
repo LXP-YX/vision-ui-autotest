@@ -17,7 +17,7 @@ This file provides guidance to AI coding agents (Claude Code / others) when work
 
 ## 项目概述
 
-**vision-ui-autotest**：自然语言驱动、视觉理解、脚本自愈的 UI 自动化测试引擎 + 可视化测试平台。纯测试客户端，仓库里没有被测应用源码；被测站点由平台「测试环境管理」页面维护的环境（DB，优先），DB 不可用时回退 `config.yaml`（单机模式）。
+**vision-ui-autotest**：自然语言驱动、视觉理解、脚本自愈的 UI 自动化测试引擎 + 可视化测试平台。纯测试客户端，仓库里没有被测应用源码；被测站点由平台「web 环境管理」页面维护的默认环境 URL（DB，优先），DB 不可用时回退 `config.yaml`（单机模式）。
 
 **配置加载优先级**：
 1. 测试数据（base_url、account）：平台 DB 的默认测试环境 > `config.yaml` 的 `site`/`account` 段
@@ -50,8 +50,9 @@ This file provides guidance to AI coding agents (Claude Code / others) when work
 ## 数据库
 
 - 连接读自 `config.yaml` 的 `database` 段：`enabled: true` 用 **MySQL**（默认库名 `vision_ui_autotest`），否则/连接失败**回退本地 SQLite**（`platform/platform.db`）。
-- 核心表：`test_case` / `test_run` / `llm_config` / `locator`（WEB 自愈知识库，带 `env_id`）/ `test_env` / `app_env`（APP 测试环境）/ `app_locator`（APP 自愈知识库，与 locator 表级拆分）等（见 `platform/backend/schema.sql`；应用启动时 `create_all` 自动建）。
+- 核心表：`test_case` / `test_run` / `llm_config` / `locator`（WEB 自愈知识库，带 `env_id`）/ `test_env`（web 环境，仅环境名 + 环境URL）/ `app_env`（APP 测试环境）/ `app_locator`（APP 自愈知识库，与 locator 表级拆分）等（见 `platform/backend/schema.sql`；应用启动时 `create_all` 自动建）。
 - `test_env.login_path` 已废弃：列保留不用（旧库该列 NOT NULL，删映射会让新建环境写库失败），页面/接口/模型输出均不再暴露。
+- `test_env.username/password` 已移除：web 环境简化为「环境名 + 环境URL」，不再维护账号密码（登录由站点会话/免登状态承担）。`db.py` 启动迁移对旧库 `ALTER TABLE ... DROP COLUMN` 删除这两列（既有先例）；`schema.sql` 与 ORM 已不含这两列。
 - 约定：**现有字段只增不改**，不含账户敏感数据。DB 变更需人工执行 SQL 脚本（`platform/backend/migrations/`）。
 
 ## 大模型接入 & VLM
@@ -71,10 +72,11 @@ This file provides guidance to AI coding agents (Claude Code / others) when work
 
 与 WEB 自动化（`core/`）完全解耦：引擎层互不依赖，仅在平台层经 `platform/backend/runner_dispatch.py` 按 `driver_type` 分流（分叉点已上提到 manager 层，APP 链路不加载 Playwright）。核心思想一致：自然语言驱动、视觉理解、脚本自愈。
 - **驱动抽象**（`core_app/drivers/`）：`base.DeviceDriver` 统一契约 + `UiNode` 统一节点模型（text/desc/resource_id/bounds）；**`appium_driver.AppiumDriver` 双平台统一实现**（Android=UiAutomator2 / iOS=XCUITest），平台差异（坐标 pt↔px 换算、按键 keycode/pressButton、back 键 iOS 走边缘手势、元素级 Unicode 输入）全部收敛在驱动内。`create_driver(platform, device_id, ...)` 两平台均返回 `AppiumDriver`；`android/adb.py` 等纯 ADB 工具保留给工作台投屏/包管理，不用于执行。
-- **平台无关用例**：同一份用例/脚本可在 Android/iOS 直接复用——执行时用 `POST /api/cases/{id}/run` 的 body `{"app_env_id":N}` 指定目标环境（App 工作台「运行环境」下拉），缺省用用例绑定的 `test_case.app_env_id`；`app_runner.run_app_case(..., run_env_id=)` 为首要优先级。
+- **平台无关用例**：同一份用例/脚本可在 Android/iOS 直接复用——执行时用 `POST /api/cases/{id}/run` 的 body `{"app_env_id":N}` 指定目标环境（App 工作台「运行环境」下拉），缺省用用例绑定的 `test_case.app_env_id`；独立脚本经 `run_app_case(..., env_override=ENV)` 直接传入执行目标，跳过用例字段解析。
 - **APP 测试环境**（`app_env` 表，「APP 测试环境」页面维护）：platform(android|ios) + 设备 serial/udid + 被测 App package/bundle_id + 可选账号；`device_serial` 保留为临时手动覆盖；未绑环境的存量用例按 Android 旧字段兼容执行。
 - **三层定位自愈**（`core_app/self_healing.py`）：`app_locator` 表（与 WEB 的 `locator` 表**表级拆分**，selector 存 `{"by","value"}` JSON）→ UiNode 语义匹配 → VLM 截图定位；知识库行带 `platform` + `env_id` 维度，同名锚点在 WEB/Android/iOS/不同环境间互不串扰。WEB 侧 `core/self_healing.py` 同样支持 `env_id`（`locator.env_id`，NULL=全局）。
 - **APP 脚本编译**（`script_compiler.compile_to_app_script`）：APP 用例可编译为独立 Python 脚本（内嵌步骤 + 调用 `run_app_case(env_override=ENV)`），**同一份脚本双平台通用**，运行期由环境变量选择平台：`APP_PLATFORM`(android|ios) / `APP_DEVICE_ID` / `APP_APP_ID` / `APP_ACTIVITY` / `VUA_REPO_ROOT`。
+- **APP 接口场景**（`app_runner._do_api_scenario`）：与 WEB 共用同一套 `worker/api_runner.py`（纯 HTTP，引擎无关）与 `api_scenario` 动作——APP 用例步骤同样写 `[接口场景#N] 名称` 即可嵌入场景，登录后 token 经用例变量上下文 `ctx` 双向共享（`ctx` 跨 APP 步骤累积，由 `run_app_case` 统一维护）。WEB 与 APP 除大模型配置外相互独立，接口库/场景库完全共用。
 - **运行要求**：双平台均需 Appium Server 常驻（地址读 `config.yaml` 的 `appium.server_url`，默认 127.0.0.1:4723）+ `pip install Appium-Python-Client`；Android 需 Node 侧 `appium-uiautomator2-driver` 且设备已连接（adb）；iOS 需 mac + Xcode（WDA 部署）。
 - **投屏**：`/ws/app/screen/{device_id}?platform=` 双平台采集（android=adb screencap，iOS=xcrun 截图预览；触控/输入仅 Android 工作台支持，iOS 交互经用例执行由 Appium 驱动）。
 
@@ -119,7 +121,7 @@ cd platform/frontend && npm run dev              # 启动 Vite 开发服务器�
 
 - **严禁用 `time.sleep` 做同步。** 一律状态等待。
 - **注释和 docstring 一律中文**；代码与标识符英文。
-- **读配置，不硬编码。** URL、账号、菜单名、token 键名都来自 `config.yaml` 或平台 DB；敏感值可用 `${ENV_VAR}` 注入。
+- **读配置，不硬编码。** URL、菜单名、token 键名都来自 `config.yaml` 或平台 DB；敏感值可用 `${ENV_VAR}` 注入。web 环境不再配账号密码，登录由站点会话/免登状态承担。
 - **定位语义优先，框架无关。** 顶部导航用 `:text-is('菜单名'):visible` 命中可见节点，不依赖 hash 压缩类名。二级菜单在 `aside` 侧边栏内。
 - **导航必须校验到达。** 点击后用面包屑（`.ant-breadcrumb` / `.el-breadcrumb`）校验，到不了抛错。
 - **默认只读，避免破坏性操作。** 不提交表单、不新建/删除数据。

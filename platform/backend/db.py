@@ -274,12 +274,12 @@ class AppLocator(Base):
 
 
 class TestEnv(Base):
-    """测试环境（页面维护，多套可切换，全落库）。
+    """web 环境（页面维护，多套可切换，全落库）。
 
-    每套是一组完整测试数据：名称 + 站点 URL + 账号 + 密码。
-    站点 URL 就是「打开即用」的地址（一般填登录页 URL），不再单独维护登录路径；
-    login_path 列仅保留不用（见下方字段注释），接口与页面均不再暴露。
-    默认环境（is_default）供登录/录制/执行使用（见 core/config.py），
+    每套只维护：环境名 + 环境URL。环境URL 就是「打开即用」的地址（一般填登录页 URL），
+    不再单独维护登录路径，也不再配置账号/密码——登录由用例步骤或被测站点的会话状态承担。
+    login_path 列仅保留不用（旧库该列 NOT NULL，写空串兼容），接口与页面均不再暴露。
+    默认环境（is_default）的 URL 供录制、执行、接口请求使用（见 core/config.py），
     完全以库为准、不读 config.yaml（仅首次空库时从 config.yaml 播种一条）。
     """
 
@@ -289,24 +289,18 @@ class TestEnv(Base):
     name: Mapped[str] = mapped_column(String(100), nullable=False)
     base_url: Mapped[str] = mapped_column(String(300), default="")
     # 已废弃（登录路径并入站点 URL）：旧库该列为 NOT NULL 且无默认值，去掉映射会让
-    # 新建环境写库失败，故保留列、统一写空串；按「现有字段只增不改」约定也不做删列迁移。
+    # 新建环境写库失败，故保留列、统一写空串。
     login_path: Mapped[str] = mapped_column(String(100), default="")
-    username: Mapped[str] = mapped_column(String(100), default="")
-    password: Mapped[str] = mapped_column(String(200), default="")
     is_default: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.now, onupdate=datetime.now
     )
 
-    def to_dict(self, mask: bool = True) -> dict:
-        pwd = self.password or ""
-        if mask and pwd:
-            pwd = "****"
+    def to_dict(self) -> dict:
         return {
             "id": self.id, "name": self.name, "base_url": self.base_url,
-            "username": self.username,
-            "password": pwd, "is_default": self.is_default,
+            "is_default": self.is_default,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
         }
 
@@ -622,7 +616,7 @@ def _migrate_add_columns() -> None:
             conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}"))
         print(f"[db] 迁移：{table} 补列 {column}")
 
-    # APP 测试环境已废弃（测试环境管理仅对 WEB 开放）。清理历史遗留的表与列，
+    # APP 测试环境已废弃（web 环境管理仅对 WEB 开放）。清理历史遗留的表与列，
     # 避免旧库里残留的 app_env 数据与悬空外键引用。
     obsolete = [("app_env", None), ("test_case", "app_env_id"), ("app_locator", "env_id")]
     with ENGINE.begin() as conn:
@@ -635,6 +629,16 @@ def _migrate_add_columns() -> None:
             elif column in {c["name"] for c in insp.get_columns(table)}:
                 conn.execute(text(f"ALTER TABLE {table} DROP COLUMN {column}"))
                 print(f"[db] 迁移：删除废弃列 {table}.{column}")
+
+    # web 环境已简化为「环境名 + 环境URL」：删除 test_env 的账号/密码列。
+    # 登录不再依赖环境账号密码（由用例步骤/站点会话承担），故两列可安全移除。
+    if insp.has_table("test_env"):
+        env_cols = {c["name"] for c in insp.get_columns("test_env")}
+        with ENGINE.begin() as conn:
+            for col in ("username", "password"):
+                if col in env_cols:
+                    conn.execute(text(f"ALTER TABLE test_env DROP COLUMN {col}"))
+                    print(f"[db] 迁移：删除废弃列 test_env.{col}")
 
 
 def _seed_test_env() -> None:
@@ -651,16 +655,13 @@ def _seed_test_env() -> None:
         from core.config import load_config
         cfg = load_config()
         site = cfg.get("site", {}) or {}
-        acc = cfg.get("account", {}) or {}
         s.add(TestEnv(
             name="默认环境",
             base_url=config.site_open_url(site),
-            username=acc.get("username", ""),
-            password=acc.get("password", ""),
             is_default=True,
         ))
         s.commit()
-        print("[db] 已从 config.yaml 播种默认测试环境")
+        print("[db] 已从 config.yaml 播种默认 web 环境")
 
 
 def _seed_cases() -> list:

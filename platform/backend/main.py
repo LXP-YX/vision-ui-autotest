@@ -663,20 +663,18 @@ def classify_locators(body: dict = None):
     return {"updated": sum(1 for r in results if r["element_type"]), "results": results}
 
 
-# ------------------------- 测试环境管理（多套环境，全落库） -------------------------
+# ------------------------- web 环境管理（多套环境，全落库） -------------------------
 
 class TestEnvIn(BaseModel):
     name: str
     base_url: str = ""  # 打开即用的站点地址（一般填登录页 URL）
-    username: str = ""
-    password: str = ""
 
 
 @app.get("/api/test-envs")
 def list_test_envs():
-    """测试环境列表（密码掩码）。"""
+    """web 环境列表（环境名 + URL）。"""
     with SessionLocal() as s:
-        return [e.to_dict(mask=True) for e in s.query(TestEnv).order_by(TestEnv.id).all()]
+        return [e.to_dict() for e in s.query(TestEnv).order_by(TestEnv.id).all()]
 
 
 @app.post("/api/test-envs")
@@ -694,10 +692,7 @@ def update_test_env(env_id: int, body: TestEnvIn):
         e = s.get(TestEnv, env_id)
         if not e:
             raise HTTPException(404, "环境不存在")
-        data = body.model_dump()
-        if "****" in (data.get("password") or ""):  # 掩码：不改密码
-            data.pop("password")
-        for k, v in data.items():
+        for k, v in body.model_dump().items():
             setattr(e, k, v)
         s.commit(); s.refresh(e)
         return e.to_dict()

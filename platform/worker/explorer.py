@@ -23,7 +23,6 @@ if str(_BK) not in sys.path:
 from core import browser as browser_mod
 from core import config, vision
 from core.llm_client import LLMError, get_client
-from core.login_page import LoginPage
 from core.main_page import MainPage, ready_menu_selector
 
 
@@ -83,10 +82,7 @@ def explore_and_generate(top: str, sub: str, count: int = 3) -> list[dict]:
 
     with browser_mod.launch_context() as (_b, ctx):
         page = ctx.new_page()
-        login = LoginPage(page)
-        login.open()
-        creds = config.get("account")
-        login.login(creds["username"], creds["password"])
+        # web 环境不含账号密码：直接打开环境 URL，依赖站点会话/免登状态
         page.goto(config.get("base_url").rstrip("/"), wait_until="domcontentloaded")
         MainPage(page).wait_visible(ready_menu_selector(), timeout=15_000)
 

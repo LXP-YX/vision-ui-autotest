@@ -29,6 +29,15 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+# 接口场景复用平台 worker（api_runner 纯 HTTP，引擎无关）与 backend（db），
+# 与 self_healing.py 注入 backend 同理；不可用时 api_scenario 动作降级为不可用。
+_BK = ROOT / "platform" / "backend"
+if str(_BK) not in sys.path:
+    sys.path.insert(0, str(_BK))
+_WK = ROOT / "platform" / "worker"
+if str(_WK) not in sys.path:
+    sys.path.insert(0, str(_WK))
+
 from core.config import load_config  # noqa: E402  （纯 yaml 读取，不含 WEB 环境逻辑）
 from core_app.drivers import create_driver  # noqa: E402
 from core_app.drivers.base import DeviceDriver, LOGICAL_KEYS  # noqa: E402
@@ -243,8 +252,69 @@ def _do_wait(seconds: float, driver: DeviceDriver, emit: EventCb) -> str:
     return f"已等待 {seconds:.0f} 秒"
 
 
+def _do_api_scenario(scenario_id: int, ctx: dict, emit: EventCb,
+                     cancel_event=None) -> str:
+    """执行接口场景：从 db 载入 → 复用 api_runner.run_scenario → 变量双向共享。
+
+    与 WEB 端 worker/runner.py 的 _do_api_scenario 对齐，差异仅在投屏：
+    APP 无 MainPage，接口场景执行期间由 run_app_case 的独立保活线程（_keepalive_loop）
+    持续截图推帧，故这里不传 frame_cb，step/done 事件同样不外抛、改以 log 前缀展示。
+
+    - ctx（APP 用例变量上下文）传入场景作为初始变量，场景内新提取变量就地写回供后续步骤引用；
+    - 场景任一步骤断言未通过 → 抛 AssertionError，run_app_case 立即中断后续 APP 步骤；
+    - base_url 由 api_runner 内部统一用 web 默认环境 URL（引擎无关，web/app 共用）。
+    """
+    try:
+        from db import ApiScenario, SessionLocal  # type: ignore
+        from api_runner import run_scenario
+    except Exception as e:  # noqa: BLE001
+        raise AssertionError(f"接口场景不可用（依赖缺失：{e}）")
+
+    with SessionLocal() as s:
+        sc = s.get(ApiScenario, scenario_id)
+        if not sc:
+            raise AssertionError(f"接口场景不存在：id={scenario_id}")
+        scenario = sc.to_dict()
+
+    scenario_name = scenario.get("name") or f"scenario#{scenario_id}"
+
+    def _inner_emit(kind: str, payload: dict) -> None:
+        if kind == "done":
+            return  # 场景 done 不外抛，避免前端把整个 APP 用例判成结束
+        if kind == "step":
+            phase = payload.get("phase", "")
+            name = payload.get("name", "")
+            state = payload.get("state", "")
+            detail = payload.get("detail", "")
+            msg = f"[接口场景] {phase}#{payload.get('index', '')} {name} → {state}"
+            if detail:
+                msg += f" — {detail}"
+            emit("log", {"msg": msg})
+        elif kind == "api":
+            method = payload.get("method", "")
+            url = payload.get("url", "")
+            status = payload.get("status", "")
+            emit("log", {"msg": f"[接口] {method} {url} → {status}"})
+        else:
+            emit(kind, payload)
+
+    emit("log", {"msg": f"▶ 进入接口场景「{scenario_name}」（携带上下文变量 {len(ctx)} 个）"})
+    result = run_scenario(scenario, _inner_emit, ctx=ctx, cancel_event=cancel_event)
+
+    result_status = result.get("status")
+    if result_status == "cancelled":
+        raise AssertionError("手动停止")
+    if result_status != "passed":
+        raise AssertionError(
+            f"接口场景「{scenario_name}」未通过：{result.get('error') or '断言失败'}"
+        )
+    passed_cnt = sum(1 for r in result.get("step_results", []) if r.get("ok"))
+    return f"接口场景「{scenario_name}」通过（{passed_cnt} 步）"
+
+
 def _dispatch(action: str, args: dict, driver: DeviceDriver, emit: EventCb,
-              env: dict, hint: dict | None = None) -> str | None:
+              env: dict, hint: dict | None = None, ctx: dict | None = None,
+              cancel_event=None) -> str | None:
     if action == "tap_element":
         target = args.get("target", "")
         if target:
@@ -269,6 +339,10 @@ def _dispatch(action: str, args: dict, driver: DeviceDriver, emit: EventCb,
         return _do_launch(driver, args, env)
     elif action == "wait":
         return _do_wait(args.get("seconds", 1), driver, emit)
+    elif action == "api_scenario":
+        sid = args.get("id")
+        if sid is not None and ctx is not None:
+            return _do_api_scenario(int(sid), ctx, emit, cancel_event=cancel_event)
     return None
 
 
@@ -301,7 +375,11 @@ def _interpret_step_rule(step: str) -> dict | None:
 
 
 def _plan_step(step: str, platform: str) -> dict | None:
-    """解析步骤：规则式（零 LLM）→ AI Planner（平台感知动作集）。"""
+    """解析步骤：接口场景正则 → 规则式（零 LLM）→ AI Planner（平台感知动作集）。"""
+    m = re.match(r"\s*\[\s*接口场景\s*#\s*(\d+)\s*\]", step)
+    if m:
+        return {"action": "api_scenario", "args": {"id": int(m.group(1))}}
+
     plan = _interpret_step_rule(step)
     if plan is not None:
         return plan
@@ -310,16 +388,18 @@ def _plan_step(step: str, platform: str) -> dict | None:
 
 
 def _interpret_step(step: str, driver: DeviceDriver, emit: EventCb,
-                    env: dict, hint: dict | None = None) -> str:
+                    env: dict, hint: dict | None = None, ctx: dict | None = None,
+                    cancel_event=None) -> str:
     """解析并执行一条中文步骤。"""
     plan = _plan_step(step, driver.platform)
     if plan:
         action, args = plan["action"], plan.get("args") or {}
         if action == "tap_element" and hint:
             args = {**args, "locator_hint": hint}
-        if action not in ("tap_element",):
+        if action not in ("tap_element", "api_scenario"):
             emit("log", {"msg": f"[AI] 解析为 {action}{args or ''}"})
-        result = _dispatch(action, args, driver, emit, env, hint=hint)
+        result = _dispatch(action, args, driver, emit, env, hint=hint,
+                           ctx=ctx, cancel_event=cancel_event)
         if result is not None:
             return result
     emit("log", {"msg": f"[跳过] 未识别步骤：{step.strip()}"})
@@ -389,6 +469,8 @@ def run_app_case(case: dict, emit: EventCb = _noop, run_id: int | None = None,
     step_results: list[dict] = []
     status = "passed"
     error = ""
+    # 用例变量上下文：接口场景（api_scenario）与之双向共享变量（token 等），跨步骤累积
+    ctx: dict = {}
 
     # 投屏保活线程
     stop = threading.Event()
@@ -410,7 +492,8 @@ def run_app_case(case: dict, emit: EventCb = _noop, run_id: int | None = None,
             hint = _step_locator_hint(step)
             emit("step", {"index": idx, "text": text, "state": "running"})
             try:
-                detail = _interpret_step(text, driver, emit, env, hint=hint)
+                detail = _interpret_step(text, driver, emit, env, hint=hint,
+                                         ctx=ctx, cancel_event=cancel_event)
                 step_results.append({"index": idx, "text": text, "ok": True, "detail": detail})
                 emit("step", {"index": idx, "text": text, "state": "passed", "detail": detail})
                 _push_frame(driver, emit)
